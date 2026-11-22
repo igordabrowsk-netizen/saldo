@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
   <title>Saldo</title>
+  <style>html,body{background:#f2f2f7;color:#000;color-scheme:only light}</style>
   <meta name="description" content="Kontrola środków: gotówka, konto, pożyczki, wydatki i statystyki.">
 
   <!-- iOS PWA -->
@@ -12,8 +13,9 @@
   <meta name="apple-mobile-web-app-title" content="Saldo">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="format-detection" content="telephone=no">
-  <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="only light">
+  <meta name="supported-color-schemes" content="light">
+  <meta name="theme-color" content="#f2f2f7">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
   <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
   <link rel="manifest" href="manifest.webmanifest">
@@ -56,7 +58,7 @@
     </section>
 
     <!-- Źródła środków -->
-    <h2 class="section-header">Źródła</h2>
+    <h2 class="section-header section-header--lg">Źródła</h2>
     <ul class="group" id="sources">
       <li>
         <button class="row" data-source="cash">
@@ -95,7 +97,7 @@
     <p class="section-footer">Stuknij źródło, aby ustawić kwotę, dodać wpływ, zapisać wydatek albo przenieść pieniądze. Pożyczone pieniądze wliczają się do łącznej sumy.</p>
 
     <!-- Historia -->
-    <h2 class="section-header">Ostatnie zmiany</h2>
+    <h2 class="section-header section-header--lg">Ostatnie zmiany</h2>
     <ul class="group" id="history"></ul>
     <p class="section-footer" id="historyHint">Stuknij wpis, aby zmienić grupę lub notatkę albo usunąć go (kwota zostanie cofnięta).</p>
     <div class="empty" id="historyEmpty">
@@ -135,31 +137,51 @@
       </div>
     </div>
 
-    <h2 class="section-header">Odkładanie miesięcznie</h2>
+    <h2 class="section-header section-header--lg">Odkładanie miesięcznie</h2>
     <section class="card chart-card">
       <div class="chart-wrap" id="savingsChart"></div>
       <p class="chart-caption" id="savingsCaption"></p>
     </section>
 
-    <h2 class="section-header">Wydatki według grup</h2>
+    <h2 class="section-header section-header--lg">Wydatki według grup</h2>
     <ul class="group" id="catStats"></ul>
     <div class="empty" id="catStatsEmpty">
       <span class="empty-icon ic" data-icon="chartColumn"></span>
       <p>Brak wydatków w tym miesiącu.</p>
     </div>
 
-    <h2 class="section-header">Wydatki dzień po dniu</h2>
+    <h2 class="section-header section-header--lg">Wydatki dzień po dniu</h2>
     <section class="card chart-card">
       <p class="chart-readout" id="dailyReadout"></p>
       <div class="chart-wrap" id="dailyChart"></div>
     </section>
 
     <div class="section-header-row">
-      <h2 class="section-header">Twoje grupy</h2>
+      <h2 class="section-header section-header--lg">Twoje grupy</h2>
       <button class="text-btn" id="addCatBtn">Dodaj</button>
     </div>
     <ul class="group" id="customCats"></ul>
     <p class="section-footer" id="customCatsHint">Własne grupy dodasz tutaj albo przy zapisywaniu wydatku.</p>
+
+    <h2 class="section-header section-header--lg">Kopia zapasowa</h2>
+    <ul class="group">
+      <li>
+        <button class="row" id="backupExport">
+          <span class="row-icon row-icon--blue"><span class="ic" data-icon="download"></span></span>
+          <span class="row-body"><span class="row-title">Zapisz kopię</span><span class="row-sub">Plik ze wszystkimi danymi, np. w Plikach lub iCloud</span></span>
+          <span class="row-chevron ic" data-icon="chevronRight"></span>
+        </button>
+      </li>
+      <li>
+        <button class="row" id="backupImport">
+          <span class="row-icon row-icon--indigo"><span class="ic" data-icon="upload"></span></span>
+          <span class="row-body"><span class="row-title">Wczytaj kopię</span><span class="row-sub">Zastąpi obecne dane danymi z pliku</span></span>
+          <span class="row-chevron ic" data-icon="chevronRight"></span>
+        </button>
+      </li>
+    </ul>
+    <input type="file" id="backupFile" accept="application/json,.json" hidden>
+    <p class="section-footer">Dane są zapisane tylko na tym telefonie. Zrób kopię od czasu do czasu, żeby ich nie stracić.</p>
     <p class="section-footer stats-footnote">Statystyki liczą wpływy (Dodaj) i wydatki (Odejmij) z gotówki i konta. Korekty stanu, przeniesienia i pożyczki nie są wliczane.</p>
   </main>
 
@@ -201,7 +223,7 @@
 
     <label class="amount-field" for="amountInput">
       <span class="amount-sign" id="amountSign"></span>
-      <input id="amountInput" type="text" inputmode="decimal" autocomplete="off" placeholder="0,00" aria-label="Kwota">
+      <input id="amountInput" type="text" inputmode="decimal" maxlength="14" autocomplete="off" placeholder="0,00" aria-label="Kwota">
       <span class="amount-currency">zł</span>
     </label>
 
@@ -254,7 +276,7 @@
       <h3 class="sheet-title" id="histTitle">Historia</h3>
       <span></span>
     </div>
-    <div class="person-scroll">
+    <div class="sheet-scroll person-scroll">
       <ul class="group group--sheet">
         <li>
           <button class="row hist-period" id="histPeriodBtn">
@@ -293,7 +315,7 @@
       <h3 class="sheet-title" id="personTitle"></h3>
       <span></span>
     </div>
-    <div class="person-scroll">
+    <div class="sheet-scroll person-scroll">
       <div class="person-hero">
         <span class="avatar avatar--lg" id="personAvatar"></span>
         <span class="person-label">Do oddania</span>
@@ -385,7 +407,7 @@
     </div>
     <label class="search-field">
       <span class="ic" data-icon="search"></span>
-      <input id="catSearch" type="search" placeholder="Szukaj lub dodaj grupę" autocomplete="off" autocorrect="off" enterkeyhint="done">
+      <input id="catSearch" type="search" maxlength="24" placeholder="Szukaj lub dodaj grupę" autocomplete="off" autocorrect="off" enterkeyhint="done">
     </label>
     <div class="cat-results" id="catResults"></div>
   </section>
@@ -398,7 +420,12 @@
     <button class="action-btn action-btn--cancel" id="actionCancel">Anuluj</button>
   </div>
 
-  <div class="toast" id="toast" hidden><span class="ic" data-icon="check"></span><span id="toastText"></span></div>
+  <div class="done-hud" id="doneHud" role="status" aria-live="polite" hidden>
+    <svg class="done-svg" viewBox="0 0 52 52" aria-hidden="true"><circle class="done-ring" cx="26" cy="26" r="23" pathLength="1"/><path class="done-check" d="M16 27.5l6.5 6.5L36.5 19" pathLength="1"/></svg>
+    <span class="done-text" id="doneText">Zapisano</span>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden><span class="toast-icon" id="toastIcon"></span><span id="toastText"></span></div>
 
   <script src="icons.js"></script>
   <script src="app.js"></script>

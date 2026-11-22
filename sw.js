@@ -1,5 +1,5 @@
 // Saldo — Service Worker (offline, cache app-shell)
-const CACHE = 'saldo-v9';
+const CACHE = 'saldo-v11';
 const SHELL = [
   './',
   './index.html',
@@ -20,22 +20,30 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-// Sieć najpierw (świeże pliki), w razie braku sieci — cache
+// Sieć najpierw (świeże pliki), w razie braku sieci — cache.
+// Do cache trafiają tylko poprawne odpowiedzi; strona główna jako zastępstwo tylko przy nawigacji.
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
   event.respondWith(
     fetch(req)
       .then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(req, copy));
+        if (res.ok && res.type === 'basic') {
+          const copy = res.clone();
+          event.waitUntil(caches.open(CACHE).then((c) => c.put(req, copy)));
+        }
         return res;
       })
-      .catch(() => caches.match(req, { ignoreSearch: true }).then((r) => r || caches.match('./index.html')))
+      .catch(() => caches.match(req, { ignoreSearch: true }).then((r) => {
+        if (r) return r;
+        if (req.mode === 'navigate') return caches.match('./index.html');
+        return Response.error();
+      }))
   );
 });

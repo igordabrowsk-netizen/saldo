@@ -1,11 +1,12 @@
 /* Saldo — kontrola środków (gotówka, konto, pożyczone, grupy wydatków, statystyki).
-   Dane w localStorage (klucz saldo_v1), kwoty w groszach. */
+   Dane w localStorage (klucz saldo_v1), kwoty w groszach (liczby całkowite). */
 (function () {
   'use strict';
 
   var icon = SaldoIcons.icon;
   var DEFAULT_CATS = SaldoIcons.DEFAULT_CATS;
   var CUSTOM_COLORS = SaldoIcons.CUSTOM_COLORS;
+  var REDUCED = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
 
   function paintIcons(root) {
     (root || document).querySelectorAll('[data-icon]').forEach(function (el) {
@@ -20,33 +21,138 @@
     bank: { name: 'Konto bankowe', short: 'Konto', icon: 'landmark' }
   };
   var HISTORY_LIMIT = 5000;
+  var MAX_GROSZE = 99999999999; // 999 999 999,99 zł
+  var loadWarning = '';
 
   function defaultState() {
     return { cash: 0, bank: 0, cashAt: null, bankAt: null, loans: [], loansAt: null, lastFund: 'cash', history: [], customCats: [] };
   }
-  function load() {
-    try {
-      var raw = localStorage.getItem(KEY);
-      if (!raw) return defaultState();
-      var s = JSON.parse(raw);
-      var d = defaultState();
-      for (var k in d) if (!(k in s)) s[k] = d[k];
-      delete s.privacy;
-      return s;
-    } catch (e) { return defaultState(); }
+  function num(v) { v = Number(v); return isFinite(v) ? Math.round(v) : 0; }
+
+  // Uzupełnia brakujące pola starszych wersji danych
+  function migrate(s) {
+    var d = defaultState();
+    for (var k in d) if (!(k in s) || s[k] === undefined) s[k] = d[k];
+    delete s.privacy;
+    s.cash = num(s.cash); s.bank = num(s.bank);
+    if (!Array.isArray(s.history)) s.history = [];
+    if (!Array.isArray(s.loans)) s.loans = [];
+    if (!Array.isArray(s.customCats)) s.customCats = [];
+    var seen = {};
+    s.history = s.history.filter(function (e) { return e && typeof e === 'object' && (e.source === 'cash' || e.source === 'bank' || e.source === 'loan'); });
+    s.history.forEach(function (e, i) {
+      if (!e.id || seen[e.id]) e.id = 'm' + i.toString(36) + '_' + (num(e.at) || 0).toString(36);
+      seen[e.id] = 1;
+      e.before = num(e.before); e.after = num(e.after); e.at = num(e.at) || Date.now();
+      if (e.note == null) e.note = '';
+      if (e.mode === 'move') { e.amount = num(e.amount) || Math.abs(e.after - e.before); if (e.to !== 'cash' && e.to !== 'bank') e.to = e.source === 'cash' ? 'bank' : 'cash'; }
+      if (e.source === 'loan' && !e.name) e.name = 'Bez nazwy';
+    });
+    s.history.sort(function (a, b) { return b.at - a.at; });
+    s.loans = s.loans.filter(function (l) { return l && typeof l === 'object' && l.name; });
+    s.loans.forEach(function (l, i) {
+      if (!l.id) l.id = 'l' + i + '_' + Date.now().toString(36);
+      l.name = String(l.name);
+      l.amount = num(l.amount);
+      l.since = num(l.since) || num(l.at) || Date.now();
+      if (l.at !== undefined) l.at = num(l.at) || l.since;
+      if (l.funds && typeof l.funds !== 'object') delete l.funds;
+    });
+    s.history.forEach(function (e) { if (e.loanSince !== undefined) e.loanSince = num(e.loanSince) || null; if (e.name !== undefined) e.name = String(e.name); });
+    ['cashAt', 'bankAt', 'loansAt'].forEach(function (k) { s[k] = num(s[k]) || null; });
+    s.customCats = s.customCats.filter(function (c) { return c && typeof c === 'object' && c.id && c.name; });
+    s.customCats.forEach(function (c) { c.name = String(c.name).slice(0, 24); if (!/^#[0-9a-f]{6}$/i.test(c.color || '')) c.color = '#8e8e93'; if (!c.icon) c.icon = 'tag'; });
+    if (['cash', 'bank', 'none'].indexOf(s.lastFund) === -1) s.lastFund = 'cash';
+    return s;
   }
+  function load() {
+    var raw = null;
+    try { raw = localStorage.getItem(KEY); } catch (e) { return defaultState(); }
+    if (!raw) return defaultState();
+    try {
+      return migrate(JSON.parse(raw));
+    } catch (e) {
+      // Uszkodzone dane — zachowaj kopię zamiast nadpisywać
+      try { localStorage.setItem(KEY + '_uszkodzone_' + Date.now(), raw); } catch (e2) { /* brak miejsca */ }
+      loadWarning = 'Nie udało się odczytać danych. Zachowano ich kopię.';
+      return defaultState();
+    }
+  }
+  var dirty = false; // zmiany, których nie udało się zapisać
   function save() {
-    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* brak miejsca / tryb prywatny */ }
+    try {
+      localStorage.setItem(KEY, JSON.stringify(state));
+      dirty = false;
+      return true;
+    } catch (e) {
+      dirty = true;
+      toast('Nie udało się zapisać danych na urządzeniu', 'info');
+      return false;
+    }
   }
   var state = load();
 
   function loansTotal() { return state.loans.reduce(function (s, l) { return s + l.amount; }, 0); }
   function findLoan(id) { for (var i = 0; i < state.loans.length; i++) if (state.loans[i].id === id) return state.loans[i]; return null; }
   function findEntry(id) { for (var i = 0; i < state.history.length; i++) if (state.history[i].id === id) return state.history[i]; return null; }
-  function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+  function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
   function other(key) { return key === 'cash' ? 'bank' : 'cash'; }
+  function sameName(a, b) { return String(a).toLowerCase() === String(b).toLowerCase(); }
+  function findLoanByName(name) { return state.loans.filter(function (l) { return sameName(l.name, name); })[0] || null; }
+
+  // ---------- Udziały pożyczki: ile wyszło z gotówki, z konta, a ile zapisano „bez zmian” ----------
+  var FUND_KEYS = ['cash', 'bank', 'none'];
+  function emptyFunds() { return { cash: 0, bank: 0, none: 0 }; }
+  function fundKey(f) { return f === 'cash' || f === 'bank' ? f : 'none'; }
+  // Zdejmuje kwotę v z udziałów w podanej kolejności; zwraca zmiany (ujemne)
+  function reduceShares(f, v, order) {
+    var ch = emptyFunds();
+    order.forEach(function (k) {
+      if (v <= 0) return;
+      var t = Math.min(f[k], v);
+      f[k] -= t; ch[k] -= t; v -= t;
+    });
+    return ch;
+  }
+  function normFunds(f, amount) {
+    FUND_KEYS.forEach(function (k) { f[k] = Math.max(0, num(f[k])); });
+    var sum = f.cash + f.bank + f.none;
+    if (sum < amount) f.none += amount - sum;
+    else if (sum > amount) reduceShares(f, sum - amount, ['none', 'bank', 'cash']);
+    return f;
+  }
+  function repayOrder(k) { return k === 'none' ? ['none', 'cash', 'bank'] : [k, 'none', other(k)]; }
+  // Odtwarza udziały starszych pożyczek z historii (od najstarszego wpisu)
+  function replayFunds(name, beforeTs) {
+    var f = emptyFunds();
+    state.history.filter(function (e) { return e.source === 'loan' && sameName(e.name, name) && (beforeTs === undefined || e.at < beforeTs); })
+      .slice().sort(function (a, b) { return a.at - b.at; }).forEach(function (e) {
+      if (e.mode === 'del' || e.after === 0) { f = emptyFunds(); return; }
+      var d = e.after - e.before, k = fundKey(e.fund);
+      if (d > 0) f[e.mode === 'set' ? 'none' : k] += d;
+      else if (d < 0) reduceShares(f, -d, e.mode === 'sub' ? repayOrder(k) : ['none', 'cash', 'bank']);
+    });
+    return f;
+  }
+  function fundsOf(l) {
+    if (!l.funds) {
+      var f = replayFunds(l.name);
+      if (f.cash + f.bank + f.none === 0 && (l.fund === 'cash' || l.fund === 'bank')) f[l.fund] = l.amount;
+      l.funds = f;
+    }
+    return normFunds(l.funds, l.amount);
+  }
+  function fundsLabel(f) {
+    if (f.cash && f.bank) return 'z gotówki i konta';
+    if (f.cash) return 'z gotówki';
+    if (f.bank) return 'z konta';
+    return '';
+  }
 
   // ---------- Grupy wydatków ----------
+  function norm(s) {
+    return String(s).toLowerCase().replace(/ł/g, 'l').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+  }
   function allCats() { return DEFAULT_CATS.concat(state.customCats); }
   function catById(id) {
     var list = allCats();
@@ -58,25 +164,21 @@
     state.history.forEach(function (e) { if (e.mode === 'sub' && e.source !== 'loan') u[e.cat || 'other'] = (u[e.cat || 'other'] || 0) + 1; });
     return u;
   }
-  function sortedCats() {
-    var u = catUsage();
-    var list = allCats().map(function (c, i) { return { c: c, i: i }; });
-    list.sort(function (a, b) {
-      var ao = a.c.id === 'other', bo = b.c.id === 'other';
-      if (ao !== bo) return ao ? 1 : -1; // „Inne” zawsze na końcu
-      return (u[b.c.id] || 0) - (u[a.c.id] || 0) || a.i - b.i;
-    });
-    return list.map(function (x) { return x.c; });
+  function nextCustomColor() {
+    var used = state.customCats.map(function (c) { return c.color; });
+    for (var i = 0; i < CUSTOM_COLORS.length; i++) if (used.indexOf(CUSTOM_COLORS[i]) === -1) return CUSTOM_COLORS[i];
+    return CUSTOM_COLORS[state.customCats.length % CUSTOM_COLORS.length];
   }
+  // Zwraca { cat, created }
   function addCustomCat(name) {
-    name = name.trim().replace(/\s+/g, ' ');
+    name = String(name).trim().replace(/\s+/g, ' ').slice(0, 24);
     if (!name) return null;
-    var exists = allCats().filter(function (c) { return c.name.toLowerCase() === name.toLowerCase(); })[0];
-    if (exists) return exists;
-    var c = { id: 'c_' + uid(), name: name, icon: 'tag', color: CUSTOM_COLORS[state.customCats.length % CUSTOM_COLORS.length] };
+    var exists = allCats().filter(function (c) { return norm(c.name) === norm(name); })[0];
+    if (exists) return { cat: exists, created: false };
+    var c = { id: 'c_' + uid(), name: name, icon: 'tag', color: nextCustomColor() };
     state.customCats.push(c);
     save();
-    return c;
+    return { cat: c, created: true };
   }
 
   // Wiersz „Grupa wydatku” (w arkuszu kwoty i w szczegółach wpisu)
@@ -84,14 +186,14 @@
     var iconEl = document.getElementById(prefix + 'Icon');
     var nameEl = document.getElementById(prefix + 'Name');
     if (!id) {
-      iconEl.style.background = 'var(--gray)';
+      iconEl.style.backgroundColor = 'var(--gray)';
       iconEl.innerHTML = icon('tag');
       nameEl.textContent = 'Wybierz grupę';
       nameEl.classList.add('is-placeholder');
       return;
     }
     var c = catById(id);
-    iconEl.style.background = c.color;
+    iconEl.style.backgroundColor = c.color;
     iconEl.innerHTML = icon(c.icon);
     nameEl.textContent = c.name;
     nameEl.classList.remove('is-placeholder');
@@ -99,9 +201,6 @@
 
   // Arkusz wyboru grupy z wyszukiwarką
   var catPick = null; // { selected, onPick }
-  function norm(s) {
-    return String(s).toLowerCase().replace(/ł/g, 'l').normalize('NFD').replace(/[̀-ͯ]/g, '');
-  }
   function byName(a, b) {
     if (a.id === 'other') return 1;
     if (b.id === 'other') return -1;
@@ -109,7 +208,7 @@
   }
   function catRow(c, sel) {
     return '<li><button class="row cat-row" data-pick="' + esc(c.id) + '">' +
-      '<span class="row-icon cat-icon" style="background:' + c.color + '">' + icon(c.icon) + '</span>' +
+      '<span class="row-icon cat-icon" style="background-color:' + c.color + '">' + icon(c.icon) + '</span>' +
       '<span class="row-body"><span class="row-title">' + esc(c.name) + '</span></span>' +
       (c.id === sel ? '<span class="row-check ic">' + icon('check') + '</span>' : '') +
       '</button></li>';
@@ -123,21 +222,21 @@
   }
   function renderCatResults() {
     var q = el.catSearch.value.trim();
-    var sel = catPick.selected;
+    var sel = catPick ? catPick.selected : null;
     var html = '';
     if (!q) {
       var u = catUsage();
       var top = allCats().filter(function (c) { return u[c.id]; }).sort(function (a, b) { return u[b.id] - u[a.id]; }).slice(0, 5);
-      if (top.length) html += '<h2 class="section-header">Najczęściej używane</h2><ul class="group group--sheet">' + top.map(function (c) { return catRow(c, sel); }).join('') + '</ul>';
-      html += '<h2 class="section-header">Wszystkie grupy</h2><ul class="group group--sheet">' +
+      if (top.length) html += '<h2 class="section-header">Najczęściej używane</h2><ul class="group">' + top.map(function (c) { return catRow(c, sel); }).join('') + '</ul>';
+      html += '<h2 class="section-header">Wszystkie grupy</h2><ul class="group">' +
         allCats().slice().sort(byName).map(function (c) { return catRow(c, sel); }).join('') + '</ul>';
     } else {
       var hits = catMatches(q);
       var exact = allCats().some(function (c) { return norm(c.name) === norm(q); });
-      html += '<ul class="group group--sheet">' + hits.map(function (c) { return catRow(c, sel); }).join('');
+      html += '<ul class="group">' + hits.map(function (c) { return catRow(c, sel); }).join('');
       if (!exact) {
         html += '<li><button class="row cat-row" data-create><span class="row-icon row-icon--blue">' + icon('plus') + '</span>' +
-          '<span class="row-body"><span class="row-title">Dodaj grupę „' + esc(q) + '”</span><span class="row-sub">Nowa własna grupa</span></span></button></li>';
+          '<span class="row-body"><span class="row-title">Dodaj grupę „' + esc(q.slice(0, 24)) + '”</span><span class="row-sub">Nowa własna grupa</span></span></button></li>';
       }
       html += '</ul>';
     }
@@ -152,16 +251,16 @@
     el.catSearch.focus({ preventScroll: true });
   }
   function pickCat(id) {
-    el.catSearch.blur();
+    if (!isOpen(el.catSheet)) return;
     if (catPick) catPick.onPick(id);
     closePanel(el.catSheet);
   }
   function createCatFromSearch() {
-    var c = addCustomCat(el.catSearch.value);
-    if (!c) return;
-    pickCat(c.id);
+    var r = addCustomCat(el.catSearch.value);
+    if (!r) return;
+    pickCat(r.cat.id);
     renderStatsIfVisible();
-    toast('Dodano grupę: ' + c.name);
+    if (r.created) showDone('Dodano grupę: ' + r.cat.name);
   }
 
   // ---------- Formatowanie ----------
@@ -183,7 +282,7 @@
     if (s === '' || s === '.') return NaN;
     if (!/^\d*\.?\d{0,2}$/.test(s)) return NaN;
     var n = Math.round(parseFloat(s) * 100);
-    return isFinite(n) ? n : NaN;
+    return isFinite(n) && n <= MAX_GROSZE ? n : NaN;
   }
   function plural(n, one, few, many) {
     if (n === 1) return '1 ' + one;
@@ -191,7 +290,7 @@
     return n + ' ' + (d >= 2 && d <= 4 && (h < 12 || h > 14) ? few : many);
   }
   function initials(name) {
-    var w = name.trim().split(/\s+/);
+    var w = String(name).trim().split(/\s+/);
     return ((w[0] || '').charAt(0) + (w[1] || '').charAt(0)).toUpperCase() || '?';
   }
   function esc(s) {
@@ -233,7 +332,7 @@
     pctCash: $('pctCash'), pctBank: $('pctBank'), pctLoan: $('pctLoan'), legendLoan: $('legendLoan'),
     cashAmount: $('cashAmount'), bankAmount: $('bankAmount'), loansAmount: $('loansAmount'),
     cashUpdated: $('cashUpdated'), bankUpdated: $('bankUpdated'), loansSub: $('loansSub'), loansRow: $('loansRow'),
-    history: $('history'), historyEmpty: $('historyEmpty'),
+    history: $('history'), historyEmpty: $('historyEmpty'), historyHint: $('historyHint'),
     historySheet: $('historySheet'), histClose: $('histClose'), histPeriodBtn: $('histPeriodBtn'), histPeriodName: $('histPeriodName'),
     histCustom: $('histCustom'), histFrom: $('histFrom'), histTo: $('histTo'), histType: $('histType'),
     histSummary: $('histSummary'), histList: $('histList'), histEmpty: $('histEmpty'),
@@ -241,7 +340,7 @@
     sheet: $('sheet'), sheetTitle: $('sheetTitle'), sheetCancel: $('sheetCancel'), sheetSave: $('sheetSave'),
     modeControl: $('modeControl'), nameGroup: $('nameGroup'), nameInput: $('nameInput'),
     sheetCurrentLabel: $('sheetCurrentLabel'), sheetCurrent: $('sheetCurrent'),
-    amountInput: $('amountInput'), amountSign: $('amountSign'),
+    amountField: document.querySelector('.amount-field'), amountInput: $('amountInput'), amountSign: $('amountSign'),
     sheetPreview: $('sheetPreview'), previewValue: $('previewValue'),
     catBlock: $('catBlock'), catPickBtn: $('catPickBtn'), moveHint: $('moveHint'),
     catSheet: $('catSheet'), catSearch: $('catSearch'), catResults: $('catResults'), catCancel: $('catCancel'),
@@ -263,11 +362,36 @@
     catStats: $('catStats'), catStatsEmpty: $('catStatsEmpty'),
     dailyChart: $('dailyChart'), dailyReadout: $('dailyReadout'),
     customCats: $('customCats'), customCatsHint: $('customCatsHint'), addCatBtn: $('addCatBtn'),
+    backupExport: $('backupExport'), backupImport: $('backupImport'), backupFile: $('backupFile'),
     actionSheet: $('actionSheet'), actionTitle: $('actionTitle'), actionGroup: $('actionGroup'), actionCancel: $('actionCancel'),
-    toast: $('toast'), toastText: $('toastText')
+    toast: $('toast'), toastIcon: $('toastIcon'), toastText: $('toastText'),
+    doneHud: $('doneHud'), doneText: $('doneText')
   };
 
+  // ---------- Animacja liczb ----------
+  function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
+  function animateMoney(node, to, signedFmt) {
+    var f = signedFmt ? signed : money;
+    var from = node.dataset.v === undefined ? null : Number(node.dataset.v);
+    node.dataset.v = to;
+    if (node._raf) cancelAnimationFrame(node._raf);
+    if (from === null || from === to || REDUCED.matches || document.hidden) { node.textContent = f(to); return; }
+    var start = null, dur = 420;
+    var step = function (ts) {
+      if (start === null) start = ts;
+      var t = Math.min(1, (ts - start) / dur);
+      node.textContent = f(Math.round(from + (to - from) * easeOut(t)));
+      if (t < 1) node._raf = requestAnimationFrame(step);
+      else {
+        node._raf = null;
+        node.classList.remove('bump'); void node.offsetWidth; node.classList.add('bump');
+      }
+    };
+    node._raf = requestAnimationFrame(step);
+  }
+
   // ---------- Render: Środki ----------
+  var lastNewId = null;
 
   function render() {
     renderHome();
@@ -279,10 +403,10 @@
     var total = state.cash + state.bank + lt;
     el.today.textContent = dayFmt.format(new Date());
 
-    el.totalAmount.textContent = money(total);
+    animateMoney(el.totalAmount, total);
     el.totalAmount.classList.toggle('is-long', Math.abs(total) >= 10000000);
     var last = Math.max(state.cashAt || 0, state.bankAt || 0, state.loansAt || 0);
-    el.totalUpdated.textContent = last ? 'Aktualizacja: ' + when(last).toLowerCase() : '';
+    el.totalUpdated.textContent = last ? when(last) : '';
 
     var c = Math.max(state.cash, 0), b = Math.max(state.bank, 0), l = Math.max(lt, 0);
     var pos = c + b + l;
@@ -298,11 +422,11 @@
     el.pctLoan.textContent = pl + '%';
     el.legendLoan.hidden = state.loans.length === 0;
 
-    el.cashAmount.textContent = money(state.cash);
-    el.bankAmount.textContent = money(state.bank);
-    el.loansAmount.textContent = money(lt);
-    el.cashAmount.style.color = state.cash < 0 ? 'var(--red)' : '';
-    el.bankAmount.style.color = state.bank < 0 ? 'var(--red)' : '';
+    animateMoney(el.cashAmount, state.cash);
+    animateMoney(el.bankAmount, state.bank);
+    animateMoney(el.loansAmount, lt);
+    el.cashAmount.classList.toggle('is-neg', state.cash < 0);
+    el.bankAmount.classList.toggle('is-neg', state.bank < 0);
     el.cashUpdated.textContent = state.cashAt ? when(state.cashAt) : 'Stuknij, aby ustawić';
     el.bankUpdated.textContent = state.bankAt ? when(state.bankAt) : 'Stuknij, aby ustawić';
     el.loansSub.textContent = state.loans.length ? plural(state.loans.length, 'osoba', 'osoby', 'osób') : 'Stuknij, aby dodać';
@@ -310,6 +434,7 @@
     renderHistory();
     renderLoans();
     renderPerson();
+    refreshEntry();
   }
 
   function renderLoans() {
@@ -317,10 +442,11 @@
     el.loansEmpty.hidden = state.loans.length > 0;
     var sorted = state.loans.slice().sort(function (a, b) { return b.amount - a.amount; });
     el.loanList.innerHTML = sorted.map(function (l) {
+      var src = fundsLabel(fundsOf(l));
       return '<li><button class="row" data-loan="' + esc(l.id) + '">' +
         '<span class="avatar">' + esc(initials(l.name)) + '</span>' +
         '<span class="row-body"><span class="row-title">' + esc(l.name) + '</span>' +
-        '<span class="row-sub">Od ' + esc(dateFmt.format(new Date(l.since))) + (l.note ? ' · ' + esc(l.note) : '') + '</span></span>' +
+        '<span class="row-sub">Od ' + esc(dateFmt.format(new Date(l.since))) + (src ? ' · ' + src : '') + (l.note ? ' · ' + esc(l.note) : '') + '</span></span>' +
         '<span class="row-value amount">' + money(l.amount) + '</span>' +
         '<span class="row-chevron ic">' + icon('chevronRight') + '</span>' +
         '</button></li>';
@@ -330,14 +456,26 @@
   var FUND_FROM = { cash: ' z gotówki', bank: ' z konta', none: '' };
   var FUND_TO = { cash: ' do gotówki', bank: ' na konto', none: '' };
 
+  function returnedLabel(r) {
+    var parts = [];
+    if (r && r.cash) parts.push(money(r.cash) + ' do gotówki');
+    if (r && r.bank) parts.push(money(r.bank) + ' na konto');
+    return parts.join(' i ');
+  }
+
   // Wygląd wpisu historii: ikona, kolor, tytuł, opis, kwota
   function describe(e) {
     var d = { delta: e.after - e.before, bg: '', cls: 'row-icon--gray', ic: 'equal', title: '', sub: '', deltaCls: 'neu' };
     if (e.source === 'loan') {
       var f = e.fund || 'none';
-      if (e.mode === 'add') { d.ic = 'handCoins'; d.cls = 'row-icon--orange'; d.sub = 'Pożyczka' + FUND_FROM[f]; }
-      else if (e.mode === 'sub') { d.ic = 'undo'; d.cls = 'row-icon--green'; d.sub = (e.after === 0 ? 'Spłata całości' : 'Spłata') + FUND_TO[f]; }
-      else if (e.mode === 'del') { d.ic = 'trash'; d.cls = 'row-icon--gray'; d.sub = f !== 'none' ? 'Cofnięto pożyczkę, zwrot' + FUND_TO[f] : 'Usunięto pożyczkę'; }
+      if (e.mode === 'add') { d.ic = 'handCoins'; d.cls = 'row-icon--orange'; d.sub = 'Pożyczka' + FUND_FROM[fundKey(f)]; }
+      else if (e.mode === 'sub') { d.ic = 'undo'; d.cls = 'row-icon--green'; d.sub = (e.after === 0 ? 'Spłata całości' : 'Spłata') + FUND_TO[fundKey(f)]; }
+      else if (e.mode === 'del') {
+        d.ic = 'trash'; d.cls = 'row-icon--gray';
+        if (e.returned && (e.returned.cash || e.returned.bank)) d.sub = 'Cofnięto pożyczkę';
+        else if (!e.returned && fundKey(f) !== 'none') d.sub = 'Cofnięto pożyczkę, zwrot' + FUND_TO[fundKey(f)];
+        else d.sub = e.writeOff ? 'Spisano na straty' : 'Usunięto pożyczkę';
+      }
       else { d.ic = 'equal'; d.cls = 'row-icon--indigo'; d.sub = 'Korekta pożyczki'; }
       d.title = e.note ? e.name + ': ' + e.note : e.name;
       d.deltaCls = 'loan';
@@ -365,8 +503,8 @@
     }
     return d;
   }
-  function iconBadge(d, extraCls) {
-    return '<span class="' + (extraCls || 'row-icon') + ' ' + d.cls + '"' + (d.bg ? ' style="background:' + d.bg + '"' : '') + '>' + icon(d.ic) + '</span>';
+  function iconBadge(d) {
+    return '<span class="row-icon ' + d.cls + '"' + (d.bg ? ' style="background-color:' + d.bg + '"' : '') + '>' + icon(d.ic) + '</span>';
   }
 
   // Jeden wiersz historii; timeOnly = w widoku dni pokazuj samą godzinę
@@ -374,7 +512,7 @@
     var d = describe(e);
     var deltaTxt = e.mode === 'move' ? money(d.delta) : signed(d.delta);
     var t = timeOnly ? timeFmt.format(new Date(e.at)) : when(e.at);
-    return '<li><button class="row hist-row" data-entry="' + esc(e.id) + '">' + iconBadge(d) +
+    return '<li><button class="row hist-row' + (e.id === lastNewId ? ' is-new' : '') + '" data-entry="' + esc(e.id) + '">' + iconBadge(d) +
       '<span class="row-body"><span class="row-title">' + esc(d.title) + '</span><span class="row-sub">' + esc(d.sub + ' · ' + t) + '</span></span>' +
       '<span class="hist-right"><span class="hist-delta amount ' + d.deltaCls + '">' + deltaTxt + '</span>' +
       '<span class="hist-after amount">' + money(e.after) + '</span></span></button></li>';
@@ -385,7 +523,7 @@
     var h = state.history;
     el.historyEmpty.hidden = h.length > 0;
     el.history.hidden = h.length === 0;
-    $('historyHint').hidden = h.length === 0;
+    el.historyHint.hidden = h.length === 0;
     var items = h.slice(0, HOME_HISTORY).map(function (e) { return histRow(e, false); });
     if (h.length) {
       items.push('<li><button class="row hist-all" id="histAll"><span class="row-body"><span class="row-title">Pokaż całą historię</span></span>' +
@@ -429,9 +567,8 @@
       case 'year': return [new Date(y, 0, 1).getTime(), INF];
       case 'custom':
         var f = parseYmd(histFilter.from), t = parseYmd(histFilter.to);
-        var a = f ? f.getTime() : 0;
-        var b = t ? new Date(t.getFullYear(), t.getMonth(), t.getDate() + 1).getTime() : INF;
-        return a <= b ? [a, b] : [b, a];
+        if (f && t && f > t) { var tmp = f; f = t; t = tmp; } // odwrócone daty
+        return [f ? f.getTime() : 0, t ? new Date(t.getFullYear(), t.getMonth(), t.getDate() + 1).getTime() : INF];
       default: return [0, INF];
     }
   }
@@ -452,6 +589,7 @@
     var s = new Intl.DateTimeFormat('pl-PL', opts).format(d);
     return s.charAt(0).toUpperCase() + s.slice(1);
   }
+  function isExpense(e) { return e.source !== 'loan' && e.mode === 'sub'; }
 
   function renderHistorySheet() {
     if (!isOpen(el.historySheet)) return;
@@ -462,10 +600,14 @@
 
     var r = periodRange();
     var list = state.history.filter(function (e) { return e.at >= r[0] && e.at < r[1] && matchesType(e); });
-    var exp = 0, inc = 0;
+    var exp = 0, inc = 0, daySum = {};
     list.forEach(function (e) {
       if (e.source === 'loan') return;
-      if (e.mode === 'sub') exp += e.before - e.after;
+      if (e.mode === 'sub') {
+        exp += e.before - e.after;
+        var k = startOfDay(e.at);
+        daySum[k] = (daySum[k] || 0) + e.before - e.after;
+      }
       if (e.mode === 'add') inc += e.after - e.before;
     });
     var parts = [plural(list.length, 'wpis', 'wpisy', 'wpisów')];
@@ -473,18 +615,17 @@
     if (exp) parts.push('wydatki <b>' + money(exp) + '</b>');
     el.histSummary.innerHTML = parts.join(' · ');
 
-    var html = '', curDay = null, dayItems = [], dayExp = 0, shown = 0;
+    var html = '', curDay = null, dayItems = [];
     var flush = function () {
       if (curDay === null) return;
-      html += '<div class="day-header"><span>' + esc(dayLabel(curDay)) + '</span>' + (dayExp ? '<span class="amount">' + money(-dayExp) + '</span>' : '') + '</div>' +
-        '<ul class="group group--sheet">' + dayItems.join('') + '</ul>';
+      html += '<div class="day-header"><span>' + esc(dayLabel(curDay)) + '</span>' + (daySum[curDay] ? '<span class="amount">' + money(-daySum[curDay]) + '</span>' : '') + '</div>' +
+        '<ul class="group">' + dayItems.join('') + '</ul>';
     };
-    for (var i = 0; i < list.length && shown < histLimit; i++, shown++) {
+    for (var i = 0; i < list.length && i < histLimit; i++) {
       var e = list[i];
       var k = startOfDay(e.at);
-      if (k !== curDay) { flush(); curDay = k; dayItems = []; dayExp = 0; }
+      if (k !== curDay) { flush(); curDay = k; dayItems = []; }
       dayItems.push(histRow(e, true));
-      if (e.source !== 'loan' && e.mode === 'sub') dayExp += e.before - e.after;
     }
     flush();
     if (list.length > histLimit) html += '<button class="primary-btn primary-btn--plain" id="histMoreBtn">Pokaż więcej (' + (list.length - histLimit) + ')</button>';
@@ -496,7 +637,7 @@
     histLimit = 100;
     openPanel(el.historySheet);
     renderHistorySheet();
-    el.historySheet.querySelector('.person-scroll').scrollTop = 0;
+    el.historySheet.querySelector('.sheet-scroll').scrollTop = 0;
   }
 
   function choosePeriod() {
@@ -505,10 +646,10 @@
         text: p.name, bold: p.id === histFilter.period,
         cb: function () {
           histFilter.period = p.id;
-          if (p.id === 'custom' && !histFilter.from) {
+          if (p.id === 'custom') {
             var n = new Date();
-            histFilter.from = ymd(new Date(n.getFullYear(), n.getMonth(), 1));
-            histFilter.to = ymd(n);
+            if (!histFilter.from) histFilter.from = ymd(new Date(n.getFullYear(), n.getMonth(), 1));
+            if (!histFilter.to) histFilter.to = ymd(n);
             el.histFrom.value = histFilter.from;
             el.histTo.value = histFilter.to;
           }
@@ -524,12 +665,21 @@
   var selMonth = nowIdx;
   var selDay = null;
 
+  function syncNow() {
+    var n = monthIdx(Date.now());
+    if (n !== nowIdx) {
+      if (selMonth === nowIdx) { selMonth = n; selDay = null; } // użytkownik patrzył na bieżący miesiąc
+      nowIdx = n;
+    }
+    if (selMonth > nowIdx) selMonth = nowIdx;
+  }
+
   function computeMonths() {
     var m = {};
     state.history.forEach(function (e) {
       if (e.source === 'loan' || (e.mode !== 'add' && e.mode !== 'sub')) return;
       var i = monthIdx(e.at);
-      var x = m[i] || (m[i] = { inc: 0, exp: 0, byCat: {}, catCount: {}, days: {}, dayCount: {}, n: 0 });
+      var x = m[i] || (m[i] = emptyMonth());
       x.n++;
       if (e.mode === 'add') { x.inc += e.after - e.before; return; }
       var v = e.before - e.after;
@@ -547,14 +697,18 @@
 
   function renderStatsIfVisible() { if (!el.viewStats.hidden) renderStats(); }
 
+  var lastChartKey = '';
   function renderStats() {
-    nowIdx = monthIdx(Date.now());
-    if (selMonth > nowIdx) selMonth = nowIdx;
+    syncNow();
     var months = computeMonths();
     var keys = Object.keys(months).map(Number);
     var firstIdx = keys.length ? Math.min.apply(null, keys) : nowIdx;
     var cur = months[selMonth] || emptyMonth();
     var mi = idxMonth(selMonth);
+    // Słupki animujemy tylko przy zmianie miesiąca lub danych, nie przy każdym odświeżeniu
+    var chartKey = selMonth + ':' + state.history.length + ':' + (state.history[0] ? state.history[0].id : '');
+    var animate = chartKey !== lastChartKey;
+    lastChartKey = chartKey;
 
     el.monthLabel.textContent = MONTHS[mi] + ' ' + idxYear(selMonth);
     el.monthPrev.disabled = selMonth <= Math.min(firstIdx, nowIdx - 1);
@@ -562,7 +716,8 @@
 
     var s = cur.inc - cur.exp;
     el.savingsLabel.textContent = (s < 0 ? 'Na minusie w ' : 'Odłożone w ') + MONTHS_IN[mi];
-    el.savingsAmount.textContent = signed(s);
+    animateMoney(el.savingsAmount, s, true);
+    el.savingsAmount.classList.toggle('is-neg', s < 0);
     if (!cur.n) el.savingsRate.innerHTML = 'Brak wpływów i wydatków w tym miesiącu.';
     else if (s >= 0 && cur.inc > 0) el.savingsRate.innerHTML = 'To <b>' + Math.round(s / cur.inc * 100) + '%</b> wpływów z tego miesiąca.';
     else if (s < 0) el.savingsRate.innerHTML = 'Wydatki były wyższe od wpływów o <b>' + money(-s) + '</b>.';
@@ -570,18 +725,17 @@
     el.incomeAmount.textContent = money(cur.inc);
     el.expenseAmount.textContent = money(cur.exp);
 
-    renderSavingsChart(months);
-    renderCatStats(cur);
-    renderDailyChart(cur);
+    renderSavingsChart(months, animate);
+    renderCatStats(cur, animate);
+    renderDailyChart(cur, animate);
     renderCustomCats();
   }
 
-  var SVGNS = 'http://www.w3.org/2000/svg';
-  // Słupek z zaokrąglonym końcem (4px) od strony wartości, płaski przy osi
-  function barPath(x, w, y0, y1) {
+  // Słupek z zaokrąglonym końcem od strony wartości, płaski przy osi
+  function barPath(x, w, y0, y1, rMax) {
     var h = Math.abs(y1 - y0);
     if (h < 0.5) return '';
-    var r = Math.min(4, w / 2, h);
+    var r = Math.min(rMax || 4, w / 2, h);
     if (y1 < y0) {
       return 'M' + x + ',' + y0 + 'V' + (y1 + r) + 'Q' + x + ',' + y1 + ' ' + (x + r) + ',' + y1 +
         'H' + (x + w - r) + 'Q' + (x + w) + ',' + y1 + ' ' + (x + w) + ',' + (y1 + r) + 'V' + y0 + 'Z';
@@ -592,27 +746,26 @@
   function svgEl(W, H, label) {
     return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="' + esc(label) + '">';
   }
+  function chartWidth(node) { return Math.max(260, Math.round(node.clientWidth || 320)); }
 
-  function renderSavingsChart(months) {
+  function renderSavingsChart(months, animate) {
     var N = 6;
     var end = selMonth > nowIdx - N ? nowIdx : selMonth;
     var idxs = [];
     for (var i = end - N + 1; i <= end; i++) idxs.push(i);
     var vals = idxs.map(function (i) { var m = months[i]; return m ? m.inc - m.exp : 0; });
 
-    var W = Math.max(260, Math.round(el.savingsChart.clientWidth || 320));
-    var H = 180, top = 24, bottom = 26;
-    var plotH = H - top - bottom;
+    var W = chartWidth(el.savingsChart);
     var maxPos = Math.max(0, Math.max.apply(null, vals));
     var maxNeg = Math.max(0, -Math.min.apply(null, vals));
+    var H = 184, top = 24, bottom = 26 + (maxNeg ? 18 : 0); // miejsce na etykietę pod ujemnym słupkiem
+    var plotH = H - top - bottom;
     var span = maxPos + maxNeg;
     var y0 = span ? top + plotH * (maxPos / span) : top + plotH;
     var k = span ? plotH / span : 0;
-    // gdy są tylko wartości ujemne, zostaw miejsce na etykietę pod słupkiem
-    if (!maxPos && maxNeg) { y0 = top; k = (plotH - 4) / span; }
 
     var sw = W / N;
-    var bw = Math.min(30, sw * 0.5);
+    var bw = Math.min(28, sw * 0.48);
     var out = svgEl(W, H, 'Odłożone pieniądze w ostatnich miesiącach');
     out += '<line class="ch-axis" x1="0" x2="' + W + '" y1="' + y0 + '" y2="' + y0 + '"/>';
     idxs.forEach(function (mIdx, j) {
@@ -621,20 +774,24 @@
       var x = cx - bw / 2;
       var y1 = y0 - v * k;
       var sel = mIdx === selMonth;
-      var p = barPath(x, bw, y0, y1);
-      if (p) out += '<path class="' + (v >= 0 ? 'ch-pos' : 'ch-neg') + (sel ? '' : ' ch-dim') + '" d="' + p + '"/>';
+      var p = barPath(x, bw, y0, y1, 6);
+      if (p) {
+        out += '<path class="' + (v >= 0 ? 'ch-pos' : 'ch-neg') + (sel ? '' : ' ch-dim') + (animate ? ' ch-anim' : '') + '"' +
+          (animate ? ' style="animation-delay:' + (j * 30) + 'ms"' : '') + ' d="' + p + '"/>';
+      }
       out += '<text class="ch-tick' + (sel ? ' is-sel' : '') + '" x="' + cx + '" y="' + (H - 6) + '" text-anchor="middle">' + MONTHS_SHORT[idxMonth(mIdx)] + '</text>';
-      if (sel && (months[mIdx])) {
+      if (sel && months[mIdx]) {
         var ly = v >= 0 ? y1 - 7 : y1 + 15;
         var anchor = j === 0 ? 'start' : j === N - 1 ? 'end' : 'middle';
         var lx = j === 0 ? x : j === N - 1 ? x + bw : cx;
         out += '<text class="ch-val" x="' + lx + '" y="' + ly + '" text-anchor="' + anchor + '">' + moneyShort(v) + '</text>';
       }
       out += '<rect class="ch-hit" data-m="' + mIdx + '" x="' + (sw * j) + '" y="0" width="' + sw + '" height="' + H + '"><title>' +
-        MONTHS[idxMonth(mIdx)] + ': ' + signed(v) + '</title></rect>';
+        MONTHS[idxMonth(mIdx)] + ': ' + esc(signed(v)) + '</title></rect>';
     });
     out += '</svg>';
     el.savingsChart.innerHTML = out;
+    el.savingsChart.dataset.w = el.savingsChart.clientWidth;
 
     var withData = idxs.filter(function (i) { return months[i]; });
     var hasNeg = vals.some(function (v) { return v < 0; });
@@ -647,27 +804,28 @@
     }
   }
 
-  function renderCatStats(cur) {
+  function renderCatStats(cur, animate) {
     var rows = Object.keys(cur.byCat).map(function (id) { return { c: catById(id), v: cur.byCat[id], n: cur.catCount[id] }; })
       .sort(function (a, b) { return b.v - a.v; });
     el.catStatsEmpty.hidden = rows.length > 0;
     el.catStats.hidden = rows.length === 0;
     if (!rows.length) { el.catStats.innerHTML = ''; return; }
     var max = rows[0].v;
-    el.catStats.innerHTML = rows.map(function (r) {
+    el.catStats.innerHTML = rows.map(function (r, i) {
       var share = cur.exp ? Math.round(r.v / cur.exp * 100) : 0;
       return '<li><div class="row cat-stat">' +
-        '<span class="row-icon cat-icon" style="background:' + r.c.color + '">' + icon(r.c.icon) + '</span>' +
+        '<span class="row-icon cat-icon" style="background-color:' + r.c.color + '">' + icon(r.c.icon) + '</span>' +
         '<span class="row-body">' +
           '<span class="cat-stat-top"><span class="row-title">' + esc(r.c.name) + '</span><span class="cat-stat-amount">' + money(r.v) + '</span></span>' +
-          '<span class="cat-stat-bottom"><span class="meter"><span style="width:' + Math.max(2, r.v / max * 100).toFixed(1) + '%"></span></span>' +
+          '<span class="cat-stat-bottom"><span class="meter"><span style="width:' + Math.max(2, r.v / max * 100).toFixed(1) + '%' +
+          (animate ? ';animation-delay:' + (i * 40) + 'ms' : ';animation:none') + '"></span></span>' +
           '<span class="cat-stat-pct">' + share + '%</span></span>' +
           '<span class="cat-stat-count">' + plural(r.n, 'wydatek', 'wydatki', 'wydatków') + '</span>' +
         '</span></div></li>';
     }).join('');
   }
 
-  function renderDailyChart(cur) {
+  function renderDailyChart(cur, animate) {
     var y = idxYear(selMonth), m = idxMonth(selMonth);
     var days = new Date(y, m + 1, 0).getDate();
     var elapsed = selMonth === nowIdx ? new Date().getDate() : days;
@@ -675,30 +833,31 @@
     for (var d = 1; d <= days; d++) vals.push(cur.days[d] || 0);
     var max = Math.max.apply(null, vals);
 
-    var W = Math.max(260, Math.round(el.dailyChart.clientWidth || 320));
-    var H = 130, top = 14, bottom = 22;
+    var W = chartWidth(el.dailyChart);
+    var H = 130, top = 16, bottom = 22;
     var plotH = H - top - bottom;
     var y0 = top + plotH;
     var k = max ? plotH / max : 0;
     var sw = W / days;
-    var bw = Math.max(2, Math.min(10, sw * 0.62));
+    var bw = Math.max(3, Math.min(9, sw * 0.6));
+    var lastWeekly = Math.floor((days - 1) / 7) * 7 + 1;
 
     var out = svgEl(W, H, 'Wydatki w kolejnych dniach miesiąca');
     if (max) {
       out += '<line class="ch-grid" x1="0" x2="' + W + '" y1="' + top + '" y2="' + top + '"/>';
-      out += '<text class="ch-tick" x="' + W + '" y="' + (top - 4) + '" text-anchor="end">' + moneyShort(max).replace('+', '') + '</text>';
+      out += '<text class="ch-tick" x="' + W + '" y="' + (top - 5) + '" text-anchor="end">' + moneyShort(max).replace('+', '') + '</text>';
     }
     out += '<line class="ch-axis" x1="0" x2="' + W + '" y1="' + y0 + '" y2="' + y0 + '"/>';
     vals.forEach(function (v, j) {
       var day = j + 1;
       var cx = sw * j + sw / 2;
-      var p = barPath(cx - bw / 2, bw, y0, y0 - v * k);
+      var p = barPath(cx - bw / 2, bw, y0, y0 - v * k, 3);
       var dim = selDay && selDay !== day;
-      if (p) out += '<path class="ch-pos' + (dim ? ' ch-dim' : '') + '" d="' + p + '"/>';
-      if (day === 1 || day % 7 === 1 || day === days) {
-        if (!(day === days && days - (Math.floor((days - 1) / 7) * 7 + 1) < 3 && day !== 1)) {
-          out += '<text class="ch-tick' + (selDay === day ? ' is-sel' : '') + '" x="' + cx + '" y="' + (H - 6) + '" text-anchor="middle">' + day + '</text>';
-        }
+      if (p) out += '<path class="ch-pos' + (dim ? ' ch-dim' : '') + (animate ? ' ch-anim' : '') + '" d="' + p + '"/>';
+      var weekly = day % 7 === 1;
+      var showLast = day === days && !weekly && days - lastWeekly >= 3;
+      if (weekly || showLast) {
+        out += '<text class="ch-tick' + (selDay === day ? ' is-sel' : '') + '" x="' + cx + '" y="' + (H - 6) + '" text-anchor="middle">' + day + '</text>';
       }
       out += '<rect class="ch-hit" data-d="' + day + '" x="' + (sw * j) + '" y="0" width="' + sw + '" height="' + H + '"/>';
     });
@@ -716,48 +875,78 @@
     }
   }
 
-  var addingCat = false;
+  // Własne grupy (Statystyki)
+  var addingCat = false, catDraft = '', focusNewCat = false;
   function renderCustomCats() {
+    var prev = $('newCatInput');
+    if (prev && addingCat) catDraft = prev.value;
     var u = catUsage();
     var rows = state.customCats.map(function (c) {
       var n = u[c.id] || 0;
       return '<li><div class="row">' +
-        '<span class="row-icon cat-icon" style="background:' + c.color + '">' + icon(c.icon) + '</span>' +
+        '<span class="row-icon cat-icon" style="background-color:' + c.color + '">' + icon(c.icon) + '</span>' +
         '<span class="row-body"><span class="row-title">' + esc(c.name) + '</span><span class="row-sub">' + (n ? plural(n, 'wydatek', 'wydatki', 'wydatków') : 'Brak wydatków') + '</span></span>' +
         '<button class="row-del" data-del-cat="' + esc(c.id) + '" aria-label="Usuń grupę ' + esc(c.name) + '">' + icon('trash') + '</button>' +
         '</div></li>';
     });
     if (addingCat) {
       rows.push('<li class="row row--input"><span class="row-icon row-icon--blue">' + icon('tag') + '</span>' +
-        '<input id="newCatInput" type="text" maxlength="24" placeholder="Nazwa nowej grupy" enterkeyhint="done">' +
+        '<input id="newCatInput" type="text" maxlength="24" placeholder="Nazwa nowej grupy" enterkeyhint="done" value="' + esc(catDraft) + '">' +
+        '<button class="text-btn" id="newCatCancel">Anuluj</button>' +
         '<button class="text-btn text-btn--bold" id="newCatSave">Dodaj</button></li>');
     }
     el.customCats.innerHTML = rows.join('');
     el.customCats.hidden = rows.length === 0;
-    el.customCatsHint.hidden = state.customCats.length > 0;
+    el.customCatsHint.hidden = state.customCats.length > 0 || addingCat;
+    el.addCatBtn.hidden = addingCat;
     if (addingCat) {
       var inp = $('newCatInput');
       var done = function () {
         if (!inp.value.trim()) { inp.focus(); return; }
-        var c = addCustomCat(inp.value);
-        addingCat = false;
+        var r = addCustomCat(inp.value);
+        addingCat = false; catDraft = '';
         renderCustomCats();
-        toast('Dodano grupę: ' + c.name);
+        if (r.created) showDone('Dodano grupę: ' + r.cat.name);
+        else toast('Grupa „' + r.cat.name + '” już istnieje', 'info');
       };
-      inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); done(); } });
+      var cancel = function () { addingCat = false; catDraft = ''; renderCustomCats(); };
+      inp.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); done(); }
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); }
+      });
       $('newCatSave').addEventListener('click', done);
-      inp.focus();
+      $('newCatCancel').addEventListener('click', cancel);
+      if (focusNewCat) { focusNewCat = false; inp.focus(); }
     }
   }
 
-  // ---------- Arkusze (wspólne) ----------
+  // ---------- Arkusze: stos otwartych paneli ----------
+  // Każdy otwarty panel dostaje kolejną warstwę; tło (backdrop) leży tuż pod najwyższym,
+  // a niższe panele są nieaktywne (inert), więc da się używać tylko tego na wierzchu.
   var PANELS = [el.sheet, el.loansSheet, el.personSheet, el.historySheet, el.entrySheet, el.catSheet, el.actionSheet];
-  // Stan „otwarty” trzymamy w data-open (ustawiany od razu), a klasę is-open dokładamy w klatce animacji
-  // tylko jeśli panel nadal ma być otwarty — szybkie „otwórz i zamknij” nie zostawi otwartego arkusza.
+  var stack = [];
+  var zTop = 50;      // warstwy rosną z każdym otwarciem, więc zamykany panel nigdy nie zasłoni nowego
+  var openedAt = 0;   // chroni przed zamknięciem panelu tym samym (podwójnym) stuknięciem, które go otworzyło
   function isOpen(panel) { return panel.dataset.open === '1'; }
-  function anyOpen() { return PANELS.some(isOpen); }
+  function anyOpen() { return stack.length > 0; }
+  function topPanel() { return stack[stack.length - 1] || null; }
+  function layoutStack() {
+    stack.forEach(function (p, i) {
+      if (i === stack.length - 1) p.removeAttribute('inert'); else p.setAttribute('inert', '');
+    });
+    var top = topPanel();
+    if (top) el.backdrop.style.zIndex = Number(top.style.zIndex) - 1;
+  }
   function openPanel(panel) {
+    clearTimeout(panel._hideT);
+    var i = stack.indexOf(panel);
+    if (i !== -1) stack.splice(i, 1);
+    stack.push(panel);
+    zTop += 2;
+    panel.style.zIndex = zTop;
+    openedAt = Date.now();
     panel.dataset.open = '1';
+    layoutStack();
     document.body.classList.add('no-scroll');
     el.backdrop.hidden = false;
     panel.hidden = false;
@@ -771,18 +960,35 @@
     });
   }
   function closePanel(panel) {
+    if (panel.contains(document.activeElement)) document.activeElement.blur();
+    var i = stack.indexOf(panel);
+    if (i !== -1) stack.splice(i, 1);
     panel.dataset.open = '0';
     panel.classList.remove('is-open');
     panel.style.transform = '';
+    panel.setAttribute('inert', '');
+    layoutStack();
     if (!anyOpen()) {
       el.backdrop.classList.remove('is-open');
       document.body.classList.remove('no-scroll');
     }
-    setTimeout(function () {
-      if (!isOpen(panel)) panel.hidden = true;
-      if (!anyOpen()) el.backdrop.hidden = true;
-    }, 380);
+    clearTimeout(panel._hideT);
+    panel._hideT = setTimeout(function () {
+      if (!isOpen(panel)) { panel.hidden = true; panel.removeAttribute('inert'); }
+      if (!anyOpen()) {
+        el.backdrop.hidden = true;
+        if (PANELS.every(function (p) { return p.hidden; })) zTop = 50;
+      }
+    }, 400);
   }
+  // Zamknięcie z właściwym sprzątaniem dla każdego panelu
+  function closeAny(panel) {
+    if (panel === el.sheet) closeEdit();
+    else if (panel === el.personSheet) closePerson();
+    else if (panel === el.entrySheet) closeEntry();
+    else closePanel(panel);
+  }
+  function closeTop() { var p = topPanel(); if (p) closeAny(p); }
 
   function setSegment(control, attr, value) {
     var btns = Array.prototype.filter.call(control.querySelectorAll('button[' + attr + ']'), function (b) { return !b.hidden; });
@@ -796,11 +1002,12 @@
   }
 
   // ---------- Arkusz edycji kwoty ----------
-  // ctx: { type: 'source', key } | { type: 'loan', id } | { type: 'newLoan' }
+  // ctx: { type: 'source', key } | { type: 'loan', id, mode } | { type: 'newLoan' }
   var ctx = null;
   var mode = 'set';
   var fund = 'cash';
   var selCat = null;
+  var lastGoodAmount = '';
 
   var MODE_LABELS = {
     source: { set: 'Ustaw', add: 'Dodaj', sub: 'Odejmij', move: 'Przenieś' },
@@ -808,12 +1015,14 @@
   };
 
   function currentValue() {
+    if (!ctx) return 0;
     if (ctx.type === 'source') return state[ctx.key];
     if (ctx.type === 'loan') { var l = findLoan(ctx.id); return l ? l.amount : 0; }
     return 0;
   }
 
   function openEdit(c) {
+    if (c.type === 'loan' && !findLoan(c.id)) return;
     ctx = c;
     var isSource = c.type === 'source';
     var labels = MODE_LABELS[isSource ? 'source' : 'loan'];
@@ -848,46 +1057,14 @@
     var startMode = c.type === 'newLoan' ? 'add' : c.type === 'loan' ? (c.mode || 'sub') : (state[c.key + 'At'] ? 'sub' : 'set');
     setMode(startMode, true);
 
+    el.sheet.scrollTop = 0;
     openPanel(el.sheet);
     // iOS pokaże klawiaturę tylko przy focus w obrębie gestu użytkownika
     (c.type === 'newLoan' ? el.nameInput : el.amountInput).focus({ preventScroll: true });
   }
 
   function closeEdit() {
-    el.amountInput.blur(); el.noteInput.blur(); el.nameInput.blur();
     closePanel(el.sheet);
-  }
-
-  // ---------- Ekran osoby (pożyczka) ----------
-  var personId = null;
-
-  function openPerson(id) {
-    personId = id;
-    renderPerson();
-    el.personSheet.querySelector('.person-scroll').scrollTop = 0;
-    openPanel(el.personSheet);
-  }
-  function closePerson() { personId = null; closePanel(el.personSheet); }
-
-  function renderPerson() {
-    if (!personId) return;
-    var l = findLoan(personId);
-    if (!l) { if (isOpen(el.personSheet)) closePerson(); return; }
-    var f = loanFund(l);
-    el.personTitle.textContent = l.name;
-    el.personAvatar.textContent = initials(l.name);
-    el.personAmount.textContent = money(l.amount);
-    el.personMeta.textContent = 'Pożyczone od ' + dayLongFmt.format(new Date(l.since)) + (f === 'cash' ? ' · z gotówki' : f === 'bank' ? ' · z konta' : '');
-    var key = l.name.toLowerCase();
-    var entries = state.history.filter(function (e) { return e.source === 'loan' && String(e.name).toLowerCase() === key; });
-    el.personHistory.innerHTML = entries.map(function (e) {
-      var d = describe(e);
-      return '<li><button class="row hist-row" data-entry="' + esc(e.id) + '">' + iconBadge(d) +
-        '<span class="row-body"><span class="row-title">' + esc(d.sub) + '</span><span class="row-sub">' + esc((e.note ? e.note + ' · ' : '') + when(e.at)) + '</span></span>' +
-        '<span class="hist-right"><span class="hist-delta amount loan">' + signed(d.delta) + '</span><span class="hist-after amount">' + money(e.after) + '</span></span>' +
-        '</button></li>';
-    }).join('');
-    el.personHistory.hidden = entries.length === 0;
   }
 
   function setMode(m, resetValue) {
@@ -897,8 +1074,11 @@
     el.amountSign.textContent = ctx.type === 'source' ? sign : '';
     el.amountSign.className = 'amount-sign' + (m === 'add' ? ' pos' : m === 'sub' ? ' neg' : '');
     if (resetValue) {
-      var setPrefill = m === 'set' && (ctx.type === 'loan' || (ctx.type === 'source' && state[ctx.key + 'At']));
-      el.amountInput.value = setPrefill ? toInput(currentValue()) : '';
+      var cur = currentValue();
+      // Ujemnego stanu nie da się wpisać w pole kwoty — wtedy zaczynamy od pustego pola
+      var setPrefill = m === 'set' && cur >= 0 && (ctx.type === 'loan' || (ctx.type === 'source' && state[ctx.key + 'At']));
+      el.amountInput.value = setPrefill ? toInput(cur) : '';
+      lastGoodAmount = el.amountInput.value;
     }
     el.catBlock.hidden = !(ctx.type === 'source' && m === 'sub');
     el.moveHint.hidden = !(ctx.type === 'source' && m === 'move');
@@ -923,9 +1103,14 @@
   }
 
   function updatePreview() {
+    if (!ctx) return;
+    // Długie kwoty: mniejsza czcionka, żeby mieściły się w polu
+    var len = el.amountInput.value.length;
+    el.amountInput.classList.toggle('is-long', len >= 8 && len < 11);
+    el.amountInput.classList.toggle('is-xlong', len >= 11);
     var v = parseAmount(el.amountInput.value);
     var n = computeNew();
-    var valid = n !== null && !(mode !== 'set' && v === 0) && !(ctx.type === 'loan' && n < 0);
+    var valid = n !== null && !(mode !== 'set' && v === 0) && !(ctx.type === 'loan' && n < 0) && Math.abs(n) <= MAX_GROSZE;
     el.sheetSave.disabled = !valid;
     el.sheetPreview.style.visibility = n === null || ctx.type === 'newLoan' ? 'hidden' : '';
     if (n !== null) {
@@ -955,17 +1140,25 @@
     }
   }
 
+  // Pole kwoty: cyfry i jeden przecinek, maks. 9 cyfr przed przecinkiem i 2 po.
+  // Przy wklejeniu „1.234,56” ostatni separator jest dziesiętny, pozostałe są pomijane.
   function sanitizeInput() {
-    var v = el.amountInput.value.replace(/\./g, ',').replace(/[^\d,]/g, '');
-    var i = v.indexOf(',');
-    if (i !== -1) v = v.slice(0, i + 1) + v.slice(i + 1).replace(/,/g, '').slice(0, 2);
-    if (v.length > 1 && v[0] === '0' && v[1] !== ',') v = v.replace(/^0+/, '') || '0';
-    if (v.replace(',', '').length > 11) v = v.slice(0, -1);
+    var raw = el.amountInput.value.replace(/[^\d.,]/g, '');
+    var lastSep = Math.max(raw.lastIndexOf(','), raw.lastIndexOf('.'));
+    var intPart = raw, frac = null;
+    if (lastSep >= 0) {
+      intPart = raw.slice(0, lastSep).replace(/[.,]/g, '');
+      frac = raw.slice(lastSep + 1).replace(/[.,]/g, '').slice(0, 2);
+    }
+    intPart = intPart.replace(/^0+(?=\d)/, '');
+    if (intPart.length > 9) { el.amountInput.value = lastGoodAmount; return; }
+    var v = frac !== null ? (intPart || '0') + ',' + frac : intPart;
     if (v !== el.amountInput.value) el.amountInput.value = v;
+    lastGoodAmount = v;
   }
 
   function applyFund(f, delta, now) {
-    if (f !== 'cash' && f !== 'bank') return;
+    if ((f !== 'cash' && f !== 'bank') || !delta) return;
     state[f] += delta;
     state[f + 'At'] = now;
   }
@@ -974,48 +1167,75 @@
     entry.id = uid();
     state.history.unshift(entry);
     if (state.history.length > HISTORY_LIMIT) state.history.length = HISTORY_LIMIT;
+    lastNewId = entry.id;
+    setTimeout(function () { if (lastNewId === entry.id) lastNewId = null; }, 1500);
+    return entry;
   }
 
+  function addShares(f, ch) { FUND_KEYS.forEach(function (k) { f[k] += ch[k] || 0; }); }
+
   function commit() {
+    // Zabezpieczenie przed podwójnym zapisem: zamykany arkusz od razu przestaje być „otwarty”,
+    // więc drugie Enter/stuknięcie podczas animacji niczego nie zapisze
+    if (!ctx || !isOpen(el.sheet)) return;
+    if (ctx.type === 'loan' && !findLoan(ctx.id)) { closeEdit(); return; }
     var v = parseAmount(el.amountInput.value);
     var n = computeNew();
     var note = el.noteInput.value.trim();
     var now = Date.now();
     var msg;
+    if (n !== null && Math.abs(n) > MAX_GROSZE) { showError('Kwota jest za duża.'); return; }
+    if (ctx.type === 'newLoan' && !isNaN(v)) {
+      var ex = findLoanByName(el.nameInput.value.trim().replace(/\s+/g, ' '));
+      if (ex && ex.amount + v > MAX_GROSZE) { showError('Kwota jest za duża.'); return; }
+    }
 
     if (ctx.type === 'newLoan') {
       var name = el.nameInput.value.trim().replace(/\s+/g, ' ');
       if (!name) { showError('Wpisz, komu pożyczasz.'); el.nameInput.focus(); return; }
       if (isNaN(v) || v <= 0) { showError('Wpisz kwotę większą od zera.'); return; }
-      var loan = state.loans.filter(function (l) { return l.name.toLowerCase() === name.toLowerCase(); })[0];
-      if (!loan) { loan = { id: uid(), name: name, amount: 0, since: now, note: '', fund: fund }; state.loans.push(loan); }
+      var loan = findLoanByName(name);
+      if (!loan) { loan = { id: uid(), name: name, amount: 0, since: now, note: '', funds: emptyFunds() }; state.loans.push(loan); }
+      var f0 = fundsOf(loan);
+      var k0 = fundKey(fund);
       var before = loan.amount;
       loan.amount += v;
+      f0[k0] += v;
       loan.at = now;
       if (note) loan.note = note;
       applyFund(fund, -v, now);
       state.lastFund = fund;
       state.loansAt = now;
-      pushHistory({ source: 'loan', name: loan.name, mode: 'add', fund: fund, before: before, after: loan.amount, at: now, note: note });
+      var sh0 = emptyFunds(); sh0[k0] = v;
+      pushHistory({ source: 'loan', name: loan.name, mode: 'add', fund: fund, before: before, after: loan.amount, at: now, note: note, shares: sh0, loanSince: loan.since });
       msg = 'Pożyczka zapisana';
     } else if (ctx.type === 'loan') {
       var l = findLoan(ctx.id);
       if (n === null) { showError('Wpisz poprawną kwotę.'); return; }
       if (mode !== 'set' && v === 0) { showError('Kwota musi być większa od zera.'); return; }
       if (n < 0) { showError('Spłata nie może być większa niż pożyczka (' + money(l.amount) + ').'); return; }
+      var f = fundsOf(l);
+      var k = fundKey(fund);
       var b = l.amount;
-      if (mode === 'add') applyFund(fund, -v, now);
-      if (mode === 'sub') applyFund(fund, v, now);
+      var shares;
+      if (mode === 'add') { applyFund(fund, -v, now); shares = emptyFunds(); shares[k] = v; addShares(f, shares); }
+      else if (mode === 'sub') { applyFund(fund, v, now); shares = reduceShares(f, v, repayOrder(k)); }
+      else {
+        var d = n - b;
+        if (d >= 0) { shares = emptyFunds(); shares.none = d; addShares(f, shares); }
+        else shares = reduceShares(f, -d, ['none', 'cash', 'bank']);
+      }
       if (mode !== 'set') state.lastFund = fund;
       l.amount = n;
+      normFunds(f, n);
       l.at = now;
       state.loansAt = now;
-      pushHistory({ source: 'loan', name: l.name, mode: mode, fund: mode === 'set' ? 'none' : fund, before: b, after: n, at: now, note: note });
+      pushHistory({ source: 'loan', name: l.name, mode: mode, fund: mode === 'set' ? 'none' : fund, before: b, after: n, at: now, note: note, shares: shares, loanSince: l.since });
       if (n === 0) {
         state.loans = state.loans.filter(function (x) { return x.id !== l.id; });
         msg = l.name + ': rozliczone';
       } else {
-        msg = mode === 'sub' ? 'Spłata zapisana' : 'Zapisano';
+        msg = mode === 'sub' ? 'Spłata zapisana' : mode === 'add' ? 'Pożyczka zapisana' : 'Kwota poprawiona';
       }
     } else {
       if (n === null) { showError('Wpisz poprawną kwotę.'); return; }
@@ -1034,53 +1254,87 @@
         var entry = { source: key, mode: mode, before: bf, after: n, at: now, note: note };
         if (mode === 'sub') entry.cat = selCat || 'other';
         pushHistory(entry);
-        msg = mode === 'sub' ? catById(entry.cat).name + ': ' + money(v) : SOURCES[key].name + ': zapisano';
+        msg = mode === 'sub' ? catById(entry.cat).name + ': ' + money(v) : mode === 'add' ? 'Wpływ: ' + money(v) : SOURCES[key].name + ': zapisano';
       }
     }
+    el.sheetSave.disabled = true;
     save();
     render();
     closeEdit();
-    toast(msg);
+    showDone(msg);
   }
 
+  function shakeAmount() {
+    el.amountField.classList.remove('is-invalid');
+    void el.amountField.offsetWidth;
+    el.amountField.classList.add('is-invalid');
+  }
   function showError(msg) {
     el.sheetError.textContent = msg;
     el.sheetError.hidden = false;
+    shakeAmount();
   }
 
-  // Skąd wyszły pieniądze na pożyczkę (gotówka / konto / bez zmian)
-  function loanFund(l) {
-    if (l.fund) return l.fund;
-    for (var i = 0; i < state.history.length; i++) {
-      var e = state.history[i];
-      if (e.source === 'loan' && e.mode === 'add' && e.name.toLowerCase() === l.name.toLowerCase()) return e.fund || 'none';
-    }
-    return 'none';
+  // ---------- Ekran osoby (pożyczka) ----------
+  var personId = null;
+
+  function openPerson(id) {
+    if (!findLoan(id)) return;
+    personId = id;
+    renderPerson();
+    el.personSheet.querySelector('.sheet-scroll').scrollTop = 0;
+    openPanel(el.personSheet);
+  }
+  function closePerson() { personId = null; closePanel(el.personSheet); }
+
+  function renderPerson() {
+    if (!personId) return;
+    var l = findLoan(personId);
+    if (!l) { if (isOpen(el.personSheet)) closePerson(); return; }
+    var src = fundsLabel(fundsOf(l));
+    el.personTitle.textContent = l.name;
+    el.personAvatar.textContent = initials(l.name);
+    el.personAmount.textContent = money(l.amount);
+    el.personMeta.textContent = 'Pożyczone od ' + dayLongFmt.format(new Date(l.since)) + (src ? ' · ' + src : '');
+    var entries = state.history.filter(function (e) { return e.source === 'loan' && sameName(e.name, l.name); });
+    el.personHistory.innerHTML = entries.map(function (e) {
+      var d = describe(e);
+      return '<li><button class="row hist-row' + (e.id === lastNewId ? ' is-new' : '') + '" data-entry="' + esc(e.id) + '">' + iconBadge(d) +
+        '<span class="row-body"><span class="row-title">' + esc(d.sub) + '</span><span class="row-sub">' + esc((e.note ? e.note + ' · ' : '') + when(e.at)) + '</span></span>' +
+        '<span class="hist-right"><span class="hist-delta amount loan">' + signed(d.delta) + '</span><span class="hist-after amount">' + money(e.after) + '</span></span>' +
+        '</button></li>';
+    }).join('');
+    el.personHistory.hidden = entries.length === 0;
   }
 
   function deleteLoan(id) {
     var l = findLoan(id);
     if (!l) return;
-    var f = loanFund(l);
-    var remove = function (back) {
+    var f = fundsOf(l);
+    var remove = function (giveBack) {
+      if (!findLoan(l.id)) return; // już usunięta (podwójne stuknięcie)
       var now = Date.now();
-      if (back) applyFund(back, l.amount, now);
+      var returned = { cash: giveBack ? f.cash : 0, bank: giveBack ? f.bank : 0 };
+      applyFund('cash', returned.cash, now);
+      applyFund('bank', returned.bank, now);
+      var shares = { cash: -f.cash, bank: -f.bank, none: -f.none };
       state.loans = state.loans.filter(function (x) { return x.id !== l.id; });
       state.loansAt = now;
-      pushHistory({ source: 'loan', name: l.name, mode: 'del', fund: back || 'none', before: l.amount, after: 0, at: now, note: '' });
+      pushHistory({ source: 'loan', name: l.name, mode: 'del', fund: 'none', before: l.amount, after: 0, at: now, note: '',
+        shares: shares, returned: returned, writeOff: !giveBack && (f.cash + f.bank) > 0, loanSince: l.since });
       save();
       render();
       if (isOpen(el.personSheet)) closePerson();
-      toast(back ? 'Pożyczka cofnięta' : 'Pożyczka usunięta');
+      if (giveBack) showDone('Pożyczka cofnięta'); else toast('Pożyczka usunięta', 'delete');
     };
-    if (f === 'cash' || f === 'bank') {
-      actionChoices('Usunąć pożyczkę: ' + l.name + ' (' + money(l.amount) + ')? Pieniądze wyszły ' + FUND_FROM[f].trim() +
-        '. Możesz je tam oddać, jakby pożyczki nie było, albo spisać na straty (łączna suma zmniejszy się).', [
-        { text: 'Oddaj ' + money(l.amount) + FUND_TO[f], cb: function () { remove(f); } },
-        { text: 'Spisz na straty', danger: true, cb: function () { remove(null); } }
+    var back = returnedLabel({ cash: f.cash, bank: f.bank });
+    if (back) {
+      actionChoices('Usunąć pożyczkę: ' + l.name + ' (' + money(l.amount) + ')? Możesz oddać pieniądze tam, skąd wyszły, jakby pożyczki nie było, albo spisać je na straty (łączna suma zmniejszy się).', [
+        { text: 'Oddaj ' + back, cb: function () { remove(true); } },
+        { text: 'Spisz na straty', danger: true, cb: function () { remove(false); } }
       ]);
     } else {
-      confirmAction('Usunąć pożyczkę: ' + l.name + ' (' + money(l.amount) + ')? Była zapisana bez zmiany gotówki i konta, więc łączna suma zmniejszy się o tę kwotę.', 'Usuń pożyczkę', function () { remove(null); });
+      confirmAction('Usunąć pożyczkę: ' + l.name + ' (' + money(l.amount) + ')? Była zapisana bez zmiany gotówki i konta, więc łączna suma zmniejszy się o tę kwotę.', 'Usuń pożyczkę', function () { remove(false); });
     }
   }
 
@@ -1088,146 +1342,196 @@
   var entryId = null;
   var entryCat = null;
 
-  function openEntry(id) {
-    var e = findEntry(id);
-    if (!e) return;
-    entryId = id;
-    var d = describe(e);
-    el.entryIcon.className = 'entry-icon ' + d.cls;
-    el.entryIcon.style.background = d.bg || '';
-    el.entryIcon.innerHTML = icon(d.ic);
-    el.entryAmount.textContent = e.mode === 'move' ? money(e.amount) : signed(d.delta);
-    el.entryMeta.textContent = d.sub + ' · ' + fullFmt.format(new Date(e.at));
-    el.entryNote.value = e.note || '';
-    var isExpense = e.source !== 'loan' && e.mode === 'sub';
-    el.entryCatBlock.hidden = !isExpense;
-    entryCat = e.cat || 'other';
-    if (isExpense) renderCatButton('entryCatPick', entryCat);
-
-    var hint, blocked = false;
-    if (e.source === 'loan') {
-      var r = loanRevert(e);
-      if (r.next < 0) {
-        blocked = true;
-        hint = 'Nie można usunąć: ' + e.name + ' ma teraz do oddania ' + money(r.cur) + ', a ten wpis dotyczy ' + money(Math.abs(r.d)) + '. Usuń najpierw nowsze wpisy tej osoby.';
-      } else {
-        hint = 'Usunięcie cofnie ten wpis. Pożyczka (' + e.name + '): ' + money(r.cur) + ' → ' + money(r.next) + '. ' +
-          (r.fund ? SOURCES[r.fund].short + ': ' + money(state[r.fund]) + ' → ' + money(state[r.fund] + r.d) + '.' : 'Łączna suma zmieni się o ' + signed(-r.d) + '.');
-      }
-    } else {
-      var src = SOURCES[e.source].short;
-      var amt = Math.abs(e.after - e.before);
-      hint = 'Usunięcie cofnie ten wpis: ' + ({
-        add: src + ' zmniejszy się o ' + money(amt) + '.',
-        sub: src + ' wzrośnie o ' + money(amt) + '.',
-        set: src + ' zmieni się o ' + signed(e.before - e.after) + '.',
-        move: src + ' wzrośnie, a ' + (e.to ? SOURCES[e.to].short.toLowerCase() : '') + ' zmniejszy się o ' + money(e.amount || 0) + '.'
-      }[e.mode] || '');
-    }
-    el.entryDeleteHint.textContent = hint;
-    el.entryDelete.disabled = blocked;
-    openPanel(el.entrySheet);
-  }
-
-  function saveEntry() {
-    var e = findEntry(entryId);
-    if (!e) return;
-    e.note = el.entryNote.value.trim();
-    if (e.source !== 'loan' && e.mode === 'sub') e.cat = entryCat || 'other';
-    save();
-    render();
-    el.entryNote.blur();
-    closePanel(el.entrySheet);
-    toast('Zapisano zmiany');
-  }
-
-  // Cofnięcie wpisu pożyczki: zmiana pożyczki (d) wraca, a gotówka/konto o tyle samo w drugą stronę
-  function findLoanByName(name) {
-    return state.loans.filter(function (l) { return l.name.toLowerCase() === String(name).toLowerCase(); })[0] || null;
-  }
+  // Skutki cofnięcia wpisu pożyczki
   function loanRevert(e) {
     var d = e.after - e.before;
     var l = findLoanByName(e.name);
     var cur = l ? l.amount : 0;
-    var f = e.fund === 'cash' || e.fund === 'bank' ? e.fund : null;
-    return { d: d, loan: l, cur: cur, next: cur - d, fund: f };
+    // Zmiana gotówki/konta przy cofnięciu
+    var fd = { cash: 0, bank: 0 };
+    if (e.returned) { fd.cash = -(e.returned.cash || 0); fd.bank = -(e.returned.bank || 0); }
+    else if (e.fund === 'cash' || e.fund === 'bank') fd[e.fund] = d;
+    return { d: d, loan: l, cur: cur, next: cur - d, fd: fd };
+  }
+  // Data rozpoczęcia pożyczki zamkniętej wpisem z chwili beforeTs (dla starszych wpisów bez loanSince)
+  function oldestLoanAt(name, beforeTs) {
+    var at = null;
+    state.history.filter(function (x) { return x.source === 'loan' && sameName(x.name, name) && x.at < beforeTs; })
+      .sort(function (a, b) { return a.at - b.at; })
+      .forEach(function (x) {
+        if (x.mode === 'del' || x.after === 0) at = null;
+        else if (at === null && x.after > 0) at = x.at;
+      });
+    return at;
+  }
+
+  function entryHint(e) {
+    if (e.source === 'loan') {
+      var r = loanRevert(e);
+      if (r.next < 0) {
+        return { blocked: true, text: 'Nie można usunąć: ' + e.name + ' ma teraz do oddania ' + money(r.cur) + ', a ten wpis dotyczy ' + money(Math.abs(r.d)) + '. Usuń najpierw nowsze wpisy tej osoby.' };
+      }
+      var parts = ['Pożyczka (' + e.name + '): ' + money(r.cur) + ' → ' + money(r.next) + '.'];
+      ['cash', 'bank'].forEach(function (k) {
+        if (r.fd[k]) parts.push(SOURCES[k].short + ': ' + money(state[k]) + ' → ' + money(state[k] + r.fd[k]) + '.');
+      });
+      var totalChange = r.fd.cash + r.fd.bank - r.d;
+      if (totalChange) parts.push('Łączna suma zmieni się o ' + signed(totalChange) + '.');
+      return { blocked: false, text: 'Usunięcie cofnie ten wpis. ' + parts.join(' ') };
+    }
+    var src = SOURCES[e.source].short;
+    var amt = Math.abs(e.after - e.before);
+    return { blocked: false, text: 'Usunięcie cofnie ten wpis: ' + ({
+      add: src + ' zmniejszy się o ' + money(amt) + '.',
+      sub: src + ' wzrośnie o ' + money(amt) + '.',
+      set: src + ' zmieni się o ' + signed(e.before - e.after) + '.',
+      move: src + ' wzrośnie, a ' + (e.to ? SOURCES[e.to].short.toLowerCase() : '') + ' zmniejszy się o ' + money(e.amount || 0) + '.'
+    }[e.mode] || '') };
+  }
+
+  function fillEntry(e) {
+    var d = describe(e);
+    el.entryIcon.className = 'entry-icon ' + d.cls;
+    el.entryIcon.style.backgroundColor = d.bg || '';
+    el.entryIcon.innerHTML = icon(d.ic);
+    el.entryAmount.textContent = e.mode === 'move' ? money(e.amount) : signed(d.delta);
+    el.entryMeta.textContent = d.sub + ' · ' + fullFmt.format(new Date(e.at));
+    var h = entryHint(e);
+    el.entryDeleteHint.textContent = h.text;
+    el.entryDelete.disabled = h.blocked;
+  }
+
+  function openEntry(id) {
+    var e = findEntry(id);
+    if (!e) return;
+    entryId = id;
+    fillEntry(e);
+    el.entryNote.value = e.note || '';
+    var exp = isExpense(e);
+    el.entryCatBlock.hidden = !exp;
+    entryCat = e.cat || 'other';
+    if (exp) renderCatButton('entryCatPick', entryCat);
+    openPanel(el.entrySheet);
+  }
+  function closeEntry() { entryId = null; closePanel(el.entrySheet); }
+  // Po zmianach gdzie indziej: odśwież albo zamknij otwarte szczegóły wpisu
+  function refreshEntry() {
+    if (!entryId || !isOpen(el.entrySheet)) return;
+    var e = findEntry(entryId);
+    if (!e) { closeEntry(); return; }
+    fillEntry(e);
+  }
+
+  function saveEntry() {
+    if (!isOpen(el.entrySheet)) return;
+    var e = findEntry(entryId);
+    if (!e) { closeEntry(); return; }
+    e.note = el.entryNote.value.trim().slice(0, 60);
+    if (isExpense(e)) e.cat = entryCat || 'other';
+    save();
+    render();
+    closeEntry();
+    showDone('Zapisano zmiany');
   }
 
   function deleteEntry() {
-    var e = findEntry(entryId);
-    if (!e) return;
-    confirmAction('Usunąć ten wpis? ' + el.entryDeleteHint.textContent.replace(/^Usunięcie cofnie ten wpis[:.] /, ''), 'Usuń wpis', function () {
+    var e0 = findEntry(entryId);
+    if (!e0) return;
+    var h = entryHint(e0);
+    if (h.blocked) return;
+    var id = e0.id;
+    confirmAction('Usunąć ten wpis? ' + h.text.replace(/^Usunięcie cofnie ten wpis[:.] /, ''), 'Usuń wpis', function () {
+      var e = findEntry(id);
+      if (!e) return; // już usunięty (podwójne stuknięcie)
       var now = Date.now();
       if (e.source === 'loan') {
         var r = loanRevert(e);
         if (r.next < 0) return;
         var l = r.loan;
         if (!l && r.next > 0) {
-          l = { id: uid(), name: e.name, amount: 0, since: e.at, note: '', fund: e.fund || 'none' };
+          // Cofnięcie wpisu zamykającego pożyczkę — odtwórz ją z pierwotną datą
+          l = { id: uid(), name: e.name, amount: 0, since: e.loanSince || oldestLoanAt(e.name, e.at) || e.at, note: '', funds: emptyFunds() };
           state.loans.push(l);
         }
-        if (l) { l.amount = r.next; l.at = now; }
-        if (l && r.next === 0) state.loans = state.loans.filter(function (x) { return x.id !== l.id; });
-        if (r.fund) { state[r.fund] += r.d; state[r.fund + 'At'] = now; }
-        state.loansAt = now;
+        // Usuń wpis, a udziały pożyczki (gotówka / konto / bez zmian) odbuduj z pozostałej historii —
+        // dzięki temu kolejność usuwania wpisów nie ma znaczenia
         state.history = state.history.filter(function (x) { return x.id !== e.id; });
-        save();
-        render();
-        closePanel(el.entrySheet);
-        toast('Wpis usunięty');
-        return;
-      }
-      if (e.mode === 'move') {
+        if (l) {
+          l.amount = r.next;
+          l.at = now;
+          l.funds = null;
+          fundsOf(l);
+          if (r.next === 0) state.loans = state.loans.filter(function (x) { return x.id !== l.id; });
+        }
+        applyFund('cash', r.fd.cash, now);
+        applyFund('bank', r.fd.bank, now);
+        state.loansAt = now;
+      } else if (e.mode === 'move') {
         state[e.source] += e.amount;
         state[e.to] -= e.amount;
         state[e.to + 'At'] = now;
+        state[e.source + 'At'] = now;
       } else {
         state[e.source] -= (e.after - e.before);
+        state[e.source + 'At'] = now;
       }
-      state[e.source + 'At'] = now;
       state.history = state.history.filter(function (x) { return x.id !== e.id; });
       save();
       render();
-      closePanel(el.entrySheet);
-      toast('Wpis usunięty');
+      closeEntry();
+      toast('Wpis usunięty', 'delete');
     });
   }
 
-  // Przeciąganie arkuszy w dół (zamykanie gestem)
+  // ---------- Przeciąganie arkuszy w dół (zamykanie gestem) ----------
   [el.sheet, el.loansSheet, el.personSheet, el.historySheet, el.entrySheet, el.catSheet].forEach(function (panel) {
-    var startY = 0, dy = 0, dragging = false;
+    var startY = 0, dy = 0, dragging = false, touchId = null;
+    var findTouch = function (list) {
+      for (var i = 0; i < list.length; i++) if (list[i].identifier === touchId) return list[i];
+      return null;
+    };
     [panel.querySelector('.sheet-grabber'), panel.querySelector('.sheet-header')].forEach(function (h) {
       h.addEventListener('touchstart', function (e) {
-        if (e.target.closest('button')) return;
-        dragging = true; startY = e.touches[0].clientY; dy = 0;
+        if (e.target.closest('button') || dragging || topPanel() !== panel) return;
+        var t = e.changedTouches[0];
+        dragging = true; touchId = t.identifier; startY = t.clientY; dy = 0;
         panel.classList.add('is-dragging');
       }, { passive: true });
     });
     window.addEventListener('touchmove', function (e) {
       if (!dragging) return;
-      dy = Math.max(0, e.touches[0].clientY - startY);
+      var t = findTouch(e.changedTouches);
+      if (!t) return;
+      dy = Math.max(0, t.clientY - startY);
       panel.style.transform = 'translateY(' + dy + 'px)';
     }, { passive: true });
-    window.addEventListener('touchend', function () {
-      if (!dragging) return;
-      dragging = false;
+    var end = function (e, cancelled) {
+      if (!dragging || !findTouch(e.changedTouches)) return;
+      dragging = false; touchId = null;
       panel.classList.remove('is-dragging');
-      if (dy > 110) {
-        if (panel === el.sheet) closeEdit(); else closePanel(panel);
-      } else panel.style.transform = '';
-    });
+      if (!cancelled && dy > 110) closeAny(panel);
+      else panel.style.transform = '';
+    };
+    window.addEventListener('touchend', function (e) { end(e, false); });
+    window.addEventListener('touchcancel', function (e) { end(e, true); });
   });
 
   // ---------- Action sheet (potwierdzenia) ----------
-  // buttons: [{ text, danger, cb }]
+  // buttons: [{ text, danger, bold, cb }] — każde potwierdzenie wykona się najwyżej raz
   function actionChoices(title, buttons) {
     el.actionTitle.textContent = title;
     el.actionGroup.querySelectorAll('.action-btn').forEach(function (b) { b.remove(); });
+    var fired = false;
     buttons.forEach(function (btn) {
       var b = document.createElement('button');
       b.className = 'action-btn' + (btn.danger ? ' action-btn--danger' : '') + (btn.bold ? ' action-btn--bold' : '');
       b.textContent = btn.text;
-      b.addEventListener('click', function () { closeActions(); btn.cb(); });
+      b.addEventListener('click', function () {
+        if (fired || !isOpen(el.actionSheet)) return;
+        fired = true;
+        closeActions();
+        btn.cb();
+      });
       el.actionGroup.appendChild(b);
     });
     openPanel(el.actionSheet);
@@ -1235,33 +1539,100 @@
   function confirmAction(title, btnText, cb) { actionChoices(title, [{ text: btnText, danger: true, cb: cb }]); }
   function closeActions() { closePanel(el.actionSheet); }
 
-  // ---------- Toast ----------
-  var toastTimer;
-  function toast(msg) {
+  // ---------- Toast i animacja potwierdzenia ----------
+  var toastTimer, toastHideTimer;
+  // kind: 'success' (fajka) | 'delete' (kosz) | 'info' (bez ikony)
+  function toast(msg, kind) {
+    kind = kind || 'success';
+    el.toast.className = 'toast toast--' + kind;
+    el.toastIcon.innerHTML = kind === 'delete' ? icon('trash') : kind === 'success' ? icon('check') : '';
     el.toastText.textContent = msg;
     el.toast.hidden = false;
-    clearTimeout(toastTimer);
+    clearTimeout(toastTimer); clearTimeout(toastHideTimer);
     requestAnimationFrame(function () { requestAnimationFrame(function () { el.toast.classList.add('is-open'); }); });
     toastTimer = setTimeout(function () {
       el.toast.classList.remove('is-open');
-      setTimeout(function () { if (!el.toast.classList.contains('is-open')) el.toast.hidden = true; }, 380);
-    }, 1800);
+      toastHideTimer = setTimeout(function () { if (!el.toast.classList.contains('is-open')) el.toast.hidden = true; }, 420);
+    }, 2000);
+  }
+
+  var doneTimers = [];
+  function showDone(text) {
+    doneTimers.forEach(clearTimeout);
+    doneTimers = [];
+    var hud = el.doneHud;
+    el.doneText.textContent = text;
+    hud.classList.remove('is-play', 'is-out');
+    hud.hidden = false;
+    void hud.offsetWidth;
+    doneTimers.push(setTimeout(function () { hud.classList.add('is-play'); }, REDUCED.matches ? 0 : 120));
+    doneTimers.push(setTimeout(function () { hud.classList.add('is-out'); }, REDUCED.matches ? 1100 : 1270));
+    doneTimers.push(setTimeout(function () { hud.hidden = true; hud.classList.remove('is-play', 'is-out'); }, REDUCED.matches ? 1300 : 1520));
+  }
+
+  // ---------- Kopia zapasowa ----------
+  function backupJson() {
+    return JSON.stringify({ app: 'saldo', version: 1, exportedAt: new Date().toISOString(), data: state }, null, 1);
+  }
+  function exportBackup() {
+    var json = backupJson();
+    var name = 'saldo-kopia-' + ymd(new Date()) + '.json';
+    var file = null;
+    try { file = new File([json], name, { type: 'application/json' }); } catch (e) { file = null; }
+    if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: 'Kopia Saldo' }).then(function () { showDone('Kopia zapisana'); }).catch(function () { /* anulowano */ });
+      return;
+    }
+    var blob = new Blob([json], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    showDone('Kopia zapisana');
+  }
+  function importBackup(file) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      var parsed;
+      try {
+        parsed = JSON.parse(String(reader.result));
+        if (parsed && parsed.app === 'saldo' && parsed.data) parsed = parsed.data;
+        if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.history)) throw new Error('format');
+      } catch (e) { toast('To nie jest plik kopii Saldo', 'info'); return; }
+      var next = migrate(parsed);
+      confirmAction('Wczytać kopię? Obecne dane (' + plural(state.history.length, 'wpis', 'wpisy', 'wpisów') + ') zostaną zastąpione danymi z kopii (' +
+        plural(next.history.length, 'wpis', 'wpisy', 'wpisów') + ', łącznie ' + money(next.cash + next.bank + next.loans.reduce(function (s, l) { return s + l.amount; }, 0)) + ').', 'Wczytaj kopię', function () {
+        try { localStorage.setItem(KEY + '_przed_wczytaniem', JSON.stringify(state)); } catch (e) { /* brak miejsca */ }
+        state = next;
+        state.loans.forEach(function (l) { fundsOf(l); });
+        save();
+        render();
+        showDone('Kopia wczytana');
+      });
+    };
+    reader.readAsText(file);
   }
 
   // ---------- Karty (Środki / Statystyki) ----------
   function switchTab(name) {
     var stats = name === 'stats';
+    var view = stats ? el.viewStats : el.viewHome;
     el.viewHome.hidden = stats;
     el.viewStats.hidden = !stats;
+    view.classList.remove('is-entering'); void view.offsetWidth; view.classList.add('is-entering');
     el.tabbar.querySelectorAll('.tab').forEach(function (t) { t.classList.toggle('is-active', t.getAttribute('data-tab') === name); });
     el.navbarTitle.textContent = stats ? 'Statystyki' : 'Środki';
     try { history.replaceState(null, '', stats ? '#stats' : location.pathname + location.search); } catch (e) { /* plik lokalny */ }
     window.scrollTo(0, 0);
     onScroll();
+    if (!stats && addingCat) { addingCat = false; catDraft = ''; renderCustomCats(); }
     if (stats) { selDay = null; renderStats(); }
   }
 
   // ---------- Zdarzenia ----------
+  document.addEventListener('touchstart', function () {}, { passive: true }); // :active na iOS
+
   document.querySelectorAll('[data-source]').forEach(function (b) {
     b.addEventListener('click', function () { openEdit({ type: 'source', key: b.getAttribute('data-source') }); });
   });
@@ -1288,6 +1659,7 @@
     if (b) openEntry(b.getAttribute('data-entry'));
   });
   el.history.addEventListener('click', function (e) {
+    if (e.target.closest('#histAll')) { openHistory(); return; }
     var b = e.target.closest('[data-entry]');
     if (b) openEntry(b.getAttribute('data-entry'));
   });
@@ -1304,33 +1676,32 @@
     updatePreview();
   });
   el.amountInput.addEventListener('input', function () { sanitizeInput(); el.sheetError.hidden = true; updatePreview(); });
-  el.amountInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
+  el.amountInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); if (!e.repeat) commit(); } });
   el.nameInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); el.amountInput.focus(); } });
   el.nameInput.addEventListener('input', function () { el.sheetError.hidden = true; });
-  el.noteInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
+  el.noteInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); if (!e.repeat) commit(); } });
   el.sheetSave.addEventListener('click', commit);
-  el.sheetCancel.addEventListener('click', function () { closeEdit(); });
-  el.fillAllBtn.addEventListener('click', function () { el.amountInput.value = toInput(currentValue()); updatePreview(); });
+  el.sheetCancel.addEventListener('click', closeEdit);
+  el.fillAllBtn.addEventListener('click', function () { el.amountInput.value = toInput(currentValue()); lastGoodAmount = el.amountInput.value; updatePreview(); });
 
-  el.entryCancel.addEventListener('click', function () { el.entryNote.blur(); closePanel(el.entrySheet); });
+  el.entryCancel.addEventListener('click', closeEntry);
   el.entrySave.addEventListener('click', saveEntry);
-  el.entryNote.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); saveEntry(); } });
+  el.entryNote.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); if (!e.repeat) saveEntry(); } });
   el.entryDelete.addEventListener('click', deleteEntry);
 
   // Wybór grupy
   el.catPickBtn.addEventListener('click', function () {
-    el.amountInput.blur(); el.noteInput.blur();
     openCatPicker(selCat, function (id) { selCat = id; renderCatButton('catPick', id); });
   });
   el.entryCatPickBtn.addEventListener('click', function () {
-    el.entryNote.blur();
     openCatPicker(entryCat, function (id) { entryCat = id; renderCatButton('entryCatPick', id); });
   });
-  el.catCancel.addEventListener('click', function () { el.catSearch.blur(); closePanel(el.catSheet); });
+  el.catCancel.addEventListener('click', function () { closePanel(el.catSheet); });
   el.catSearch.addEventListener('input', renderCatResults);
   el.catSearch.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter') return;
     e.preventDefault();
+    if (e.repeat) return;
     var q = el.catSearch.value.trim();
     if (!q) return;
     var hits = catMatches(q);
@@ -1342,30 +1713,10 @@
     if (e.target.closest('[data-create]')) createCatFromSearch();
   });
 
-  el.backdrop.addEventListener('click', function () {
-    if (isOpen(el.actionSheet)) closeActions();
-    else if (isOpen(el.catSheet)) closePanel(el.catSheet);
-    else if (isOpen(el.sheet)) closeEdit(false);
-    else if (isOpen(el.entrySheet)) closePanel(el.entrySheet);
-    else if (isOpen(el.personSheet)) closePerson();
-    else if (isOpen(el.historySheet)) closePanel(el.historySheet);
-    else if (isOpen(el.loansSheet)) closePanel(el.loansSheet);
-  });
-  document.addEventListener('keydown', function (e) {
-    if (e.key !== 'Escape') return;
-    if (isOpen(el.actionSheet)) closeActions();
-    else if (isOpen(el.catSheet)) closePanel(el.catSheet);
-    else if (isOpen(el.sheet)) closeEdit();
-    else if (isOpen(el.entrySheet)) closePanel(el.entrySheet);
-    else if (isOpen(el.personSheet)) closePerson();
-    else if (isOpen(el.historySheet)) closePanel(el.historySheet);
-    else if (isOpen(el.loansSheet)) closePanel(el.loansSheet);
-  });
+  el.backdrop.addEventListener('click', function () { if (Date.now() - openedAt > 350) closeTop(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeTop(); });
 
   // Historia
-  el.history.addEventListener('click', function (e) {
-    if (e.target.closest('#histAll')) openHistory();
-  });
   el.histClose.addEventListener('click', function () { closePanel(el.historySheet); });
   el.histPeriodBtn.addEventListener('click', choosePeriod);
   el.histType.addEventListener('click', function (e) {
@@ -1395,7 +1746,7 @@
     if (t) switchTab(t.getAttribute('data-tab'));
   });
   el.monthPrev.addEventListener('click', function () { selMonth--; selDay = null; renderStats(); });
-  el.monthNext.addEventListener('click', function () { if (selMonth < nowIdx) { selMonth++; selDay = null; renderStats(); } });
+  el.monthNext.addEventListener('click', function () { syncNow(); if (selMonth < nowIdx) { selMonth++; selDay = null; renderStats(); } });
   el.savingsChart.addEventListener('click', function (e) {
     var r = e.target.closest('[data-m]');
     if (!r) return;
@@ -1404,37 +1755,65 @@
   el.dailyChart.addEventListener('click', function (e) {
     var r = e.target.closest('[data-d]');
     if (!r) return;
+    syncNow();
     var d = Number(r.getAttribute('data-d'));
     selDay = selDay === d ? null : d;
     var months = computeMonths();
-    renderDailyChart(months[selMonth] || emptyMonth());
+    renderDailyChart(months[selMonth] || emptyMonth(), false);
   });
-  el.addCatBtn.addEventListener('click', function () { addingCat = true; renderCustomCats(); });
+  el.addCatBtn.addEventListener('click', function () { addingCat = true; focusNewCat = true; renderCustomCats(); });
   el.customCats.addEventListener('click', function (e) {
     var b = e.target.closest('[data-del-cat]');
     if (!b) return;
     var id = b.getAttribute('data-del-cat');
     var c = catById(id);
     confirmAction('Usunąć grupę „' + c.name + '”? Wydatki z tej grupy trafią do grupy „Inne”.', 'Usuń grupę', function () {
+      if (!state.customCats.some(function (x) { return x.id === id; })) return;
       state.customCats = state.customCats.filter(function (x) { return x.id !== id; });
       state.history.forEach(function (h) { if (h.cat === id) h.cat = 'other'; });
-      save(); render(); toast('Grupa usunięta');
+      save(); render(); toast('Grupa usunięta', 'delete');
     });
   });
+  el.backupExport.addEventListener('click', exportBackup);
+  el.backupImport.addEventListener('click', function () { el.backupFile.value = ''; el.backupFile.click(); });
+  el.backupFile.addEventListener('change', function () { if (el.backupFile.files && el.backupFile.files[0]) importBackup(el.backupFile.files[0]); });
+
   var resizeTimer;
-  window.addEventListener('resize', function () { clearTimeout(resizeTimer); resizeTimer = setTimeout(renderStatsIfVisible, 150); });
+  window.addEventListener('resize', function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () {
+      if (el.viewStats.hidden) return;
+      if (String(el.savingsChart.clientWidth) === el.savingsChart.dataset.w) return; // np. klawiatura — szerokość bez zmian
+      renderStats();
+    }, 150);
+  });
 
   // Mały tytuł w pasku po przewinięciu dużego tytułu
   function onScroll() { el.navbar.classList.toggle('is-scrolled', window.scrollY > 36); }
   window.addEventListener('scroll', onScroll, { passive: true });
 
   // Odświeżaj czasy względne
-  setInterval(function () { if (!anyOpen()) renderHome(); }, 60000);
-  document.addEventListener('visibilitychange', function () { if (!document.hidden && !anyOpen()) { state = load(); render(); } });
+  setInterval(function () {
+    if (anyOpen() || document.hidden) return;
+    renderHome();
+    if (!addingCat) renderStatsIfVisible(); // nie przerywaj wpisywania nazwy nowej grupy
+  }, 60000);
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden || anyOpen()) return;
+    // Nie nadpisuj niezapisanych zmian danymi z pamięci
+    if (!dirty) state = load();
+    state.loans.forEach(function (l) { fundsOf(l); });
+    render();
+  });
 
+  // Poproś przeglądarkę, by nie usuwała danych przy braku miejsca
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {}); } catch (e) { /* brak */ }
+
+  state.loans.forEach(function (l) { fundsOf(l); });
   paintIcons();
   renderHome();
   switchTab(location.hash === '#stats' ? 'stats' : 'home');
+  if (loadWarning) toast(loadWarning, 'info');
 
   // ---------- Service Worker ----------
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
