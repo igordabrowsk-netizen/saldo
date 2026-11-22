@@ -212,10 +212,18 @@
       Nowy stan: <b id="previewValue">0,00 zł</b>
     </div>
 
-    <div class="cat-block" id="catBlock" hidden>
-      <p class="field-label">Grupa wydatku</p>
-      <div class="chips" id="catChips"></div>
-    </div>
+    <ul class="group group--sheet cat-block" id="catBlock" hidden>
+      <li>
+        <button type="button" class="row cat-pick" id="catPickBtn">
+          <span class="row-icon cat-icon" id="catPickIcon"></span>
+          <span class="row-body">
+            <span class="row-sub">Grupa wydatku</span>
+            <span class="row-title" id="catPickName">Wybierz grupę</span>
+          </span>
+          <span class="row-chevron ic" data-icon="chevronRight"></span>
+        </button>
+      </li>
+    </ul>
 
     <p class="field-hint" id="moveHint" hidden></p>
 
@@ -274,10 +282,18 @@
       <b class="entry-amount amount" id="entryAmount"></b>
       <span class="entry-meta" id="entryMeta"></span>
     </div>
-    <div class="cat-block" id="entryCatBlock" hidden>
-      <p class="field-label">Grupa wydatku</p>
-      <div class="chips" id="entryChips"></div>
-    </div>
+    <ul class="group group--sheet cat-block" id="entryCatBlock" hidden>
+      <li>
+        <button type="button" class="row cat-pick" id="entryCatPickBtn">
+          <span class="row-icon cat-icon" id="entryCatPickIcon"></span>
+          <span class="row-body">
+            <span class="row-sub">Grupa wydatku</span>
+            <span class="row-title" id="entryCatPickName">Wybierz grupę</span>
+          </span>
+          <span class="row-chevron ic" data-icon="chevronRight"></span>
+        </button>
+      </li>
+    </ul>
     <ul class="group group--sheet">
       <li class="row row--input">
         <span class="row-icon row-icon--gray"><span class="ic" data-icon="pencil"></span></span>
@@ -286,6 +302,21 @@
     </ul>
     <button class="danger-btn" id="entryDelete">Usuń wpis</button>
     <p class="section-footer" id="entryDeleteHint"></p>
+  </section>
+
+  <!-- Arkusz wyboru grupy z wyszukiwarką -->
+  <section class="sheet sheet--tall sheet--top" id="catSheet" role="dialog" aria-modal="true" aria-labelledby="catTitle" hidden>
+    <div class="sheet-grabber"><span></span></div>
+    <div class="sheet-header">
+      <button class="text-btn" id="catCancel">Anuluj</button>
+      <h3 class="sheet-title" id="catTitle">Grupa wydatku</h3>
+      <span></span>
+    </div>
+    <label class="search-field">
+      <span class="ic" data-icon="search"></span>
+      <input id="catSearch" type="search" placeholder="Szukaj lub dodaj grupę" autocomplete="off" autocorrect="off" enterkeyhint="done">
+    </label>
+    <div class="cat-results" id="catResults"></div>
   </section>
 
   <!-- Arkusz akcji (potwierdzenie) -->

@@ -79,46 +79,89 @@
     return c;
   }
 
-  // Chipy wyboru grupy (wspólne dla arkusza kwoty i szczegółów wpisu)
-  function renderChips(container, selectedId, onPick) {
-    var html = sortedCats().map(function (c) {
-      return '<button type="button" class="chip' + (c.id === selectedId ? ' is-selected' : '') + '" data-cat="' + esc(c.id) + '">' +
-        '<span class="chip-dot" style="background:' + c.color + '">' + icon(c.icon) + '</span>' + esc(c.name) + '</button>';
-    }).join('');
-    html += '<button type="button" class="chip chip--add" data-cat-add>' + icon('plus') + 'Nowa grupa</button>';
-    container.innerHTML = html;
-    container.scrollLeft = 0;
+  // Wiersz „Grupa wydatku” (w arkuszu kwoty i w szczegółach wpisu)
+  function renderCatButton(prefix, id) {
+    var iconEl = document.getElementById(prefix + 'Icon');
+    var nameEl = document.getElementById(prefix + 'Name');
+    if (!id) {
+      iconEl.style.background = 'var(--gray)';
+      iconEl.innerHTML = icon('tag');
+      nameEl.textContent = 'Wybierz grupę';
+      nameEl.classList.add('is-placeholder');
+      return;
+    }
+    var c = catById(id);
+    iconEl.style.background = c.color;
+    iconEl.innerHTML = icon(c.icon);
+    nameEl.textContent = c.name;
+    nameEl.classList.remove('is-placeholder');
+  }
 
-    container.onclick = function (e) {
-      var add = e.target.closest('[data-cat-add]');
-      if (add) {
-        var wrap = document.createElement('span');
-        wrap.className = 'chip chip--input';
-        wrap.innerHTML = '<input type="text" maxlength="24" placeholder="Nazwa grupy" enterkeyhint="done"><button type="button" aria-label="Dodaj grupę">' + icon('check') + '</button>';
-        add.replaceWith(wrap);
-        var inp = wrap.querySelector('input');
-        var confirm = function () {
-          var c = addCustomCat(inp.value);
-          if (!c) { inp.focus(); return; }
-          onPick(c.id);
-          renderChips(container, c.id, onPick);
-          var sel = container.querySelector('.is-selected');
-          if (sel) container.scrollLeft = Math.max(0, sel.offsetLeft - 16);
-          renderStatsIfVisible();
-        };
-        inp.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); confirm(); } });
-        wrap.querySelector('button').addEventListener('click', confirm);
-        inp.focus();
-        container.scrollLeft = container.scrollWidth;
-        return;
+  // Arkusz wyboru grupy z wyszukiwarką
+  var catPick = null; // { selected, onPick }
+  function norm(s) {
+    return String(s).toLowerCase().replace(/ł/g, 'l').normalize('NFD').replace(/[̀-ͯ]/g, '');
+  }
+  function byName(a, b) {
+    if (a.id === 'other') return 1;
+    if (b.id === 'other') return -1;
+    return a.name.localeCompare(b.name, 'pl');
+  }
+  function catRow(c, sel) {
+    return '<li><button class="row cat-row" data-pick="' + esc(c.id) + '">' +
+      '<span class="row-icon cat-icon" style="background:' + c.color + '">' + icon(c.icon) + '</span>' +
+      '<span class="row-body"><span class="row-title">' + esc(c.name) + '</span></span>' +
+      (c.id === sel ? '<span class="row-check ic">' + icon('check') + '</span>' : '') +
+      '</button></li>';
+  }
+  function catMatches(q) {
+    var nq = norm(q);
+    return allCats().filter(function (c) { return norm(c.name).indexOf(nq) !== -1; }).sort(function (a, b) {
+      var as = norm(a.name).indexOf(nq) === 0, bs = norm(b.name).indexOf(nq) === 0;
+      return as !== bs ? (as ? -1 : 1) : byName(a, b);
+    });
+  }
+  function renderCatResults() {
+    var q = el.catSearch.value.trim();
+    var sel = catPick.selected;
+    var html = '';
+    if (!q) {
+      var u = catUsage();
+      var top = allCats().filter(function (c) { return u[c.id]; }).sort(function (a, b) { return u[b.id] - u[a.id]; }).slice(0, 5);
+      if (top.length) html += '<h2 class="section-header">Najczęściej używane</h2><ul class="group group--sheet">' + top.map(function (c) { return catRow(c, sel); }).join('') + '</ul>';
+      html += '<h2 class="section-header">Wszystkie grupy</h2><ul class="group group--sheet">' +
+        allCats().slice().sort(byName).map(function (c) { return catRow(c, sel); }).join('') + '</ul>';
+    } else {
+      var hits = catMatches(q);
+      var exact = allCats().some(function (c) { return norm(c.name) === norm(q); });
+      html += '<ul class="group group--sheet">' + hits.map(function (c) { return catRow(c, sel); }).join('');
+      if (!exact) {
+        html += '<li><button class="row cat-row" data-create><span class="row-icon row-icon--blue">' + icon('plus') + '</span>' +
+          '<span class="row-body"><span class="row-title">Dodaj grupę „' + esc(q) + '”</span><span class="row-sub">Nowa własna grupa</span></span></button></li>';
       }
-      var b = e.target.closest('[data-cat]');
-      if (!b) return;
-      var id = b.getAttribute('data-cat');
-      onPick(id);
-      container.querySelectorAll('.chip.is-selected').forEach(function (x) { x.classList.remove('is-selected'); });
-      b.classList.add('is-selected');
-    };
+      html += '</ul>';
+    }
+    el.catResults.innerHTML = html;
+  }
+  function openCatPicker(selected, onPick) {
+    catPick = { selected: selected, onPick: onPick };
+    el.catSearch.value = '';
+    renderCatResults();
+    el.catResults.scrollTop = 0;
+    openPanel(el.catSheet);
+    el.catSearch.focus({ preventScroll: true });
+  }
+  function pickCat(id) {
+    el.catSearch.blur();
+    if (catPick) catPick.onPick(id);
+    closePanel(el.catSheet);
+  }
+  function createCatFromSearch() {
+    var c = addCustomCat(el.catSearch.value);
+    if (!c) return;
+    pickCat(c.id);
+    renderStatsIfVisible();
+    toast('Dodano grupę: ' + c.name);
   }
 
   // ---------- Formatowanie ----------
@@ -197,14 +240,15 @@
     sheetCurrentLabel: $('sheetCurrentLabel'), sheetCurrent: $('sheetCurrent'),
     amountInput: $('amountInput'), amountSign: $('amountSign'),
     sheetPreview: $('sheetPreview'), previewValue: $('previewValue'),
-    catBlock: $('catBlock'), catChips: $('catChips'), moveHint: $('moveHint'),
+    catBlock: $('catBlock'), catPickBtn: $('catPickBtn'), moveHint: $('moveHint'),
+    catSheet: $('catSheet'), catSearch: $('catSearch'), catResults: $('catResults'), catCancel: $('catCancel'),
     fundBlock: $('fundBlock'), fundLabel: $('fundLabel'), fundControl: $('fundControl'), fundHint: $('fundHint'),
     noteInput: $('noteInput'), sheetError: $('sheetError'), deleteLoanBtn: $('deleteLoanBtn'),
     loansSheet: $('loansSheet'), loansClose: $('loansClose'), loansAdd: $('loansAdd'), loansAddBig: $('loansAddBig'),
     loansTotal: $('loansTotal'), loanList: $('loanList'), loansEmpty: $('loansEmpty'),
     entrySheet: $('entrySheet'), entryCancel: $('entryCancel'), entrySave: $('entrySave'),
     entryIcon: $('entryIcon'), entryAmount: $('entryAmount'), entryMeta: $('entryMeta'),
-    entryCatBlock: $('entryCatBlock'), entryChips: $('entryChips'), entryNote: $('entryNote'),
+    entryCatBlock: $('entryCatBlock'), entryCatPickBtn: $('entryCatPickBtn'), entryNote: $('entryNote'),
     entryDelete: $('entryDelete'), entryDeleteHint: $('entryDeleteHint'),
     monthPrev: $('monthPrev'), monthNext: $('monthNext'), monthLabel: $('monthLabel'),
     savingsLabel: $('savingsLabel'), savingsAmount: $('savingsAmount'), savingsRate: $('savingsRate'),
@@ -577,7 +621,7 @@
   }
 
   // ---------- Arkusze (wspólne) ----------
-  var PANELS = [el.sheet, el.loansSheet, el.entrySheet, el.actionSheet];
+  var PANELS = [el.sheet, el.loansSheet, el.entrySheet, el.catSheet, el.actionSheet];
   function anyOpen() { return PANELS.some(function (s) { return s.classList.contains('is-open'); }); }
   function openPanel(panel) {
     document.body.classList.add('no-scroll');
@@ -663,7 +707,7 @@
     fund = state.lastFund || 'cash';
     setSegment(el.fundControl, 'data-fund', fund);
     selCat = null;
-    if (isSource) renderChips(el.catChips, null, function (id) { selCat = id; });
+    if (isSource) renderCatButton('catPick', null);
 
     var startMode = c.type === 'newLoan' ? 'add' : c.type === 'loan' ? 'sub' : (state[c.key + 'At'] ? 'sub' : 'set');
     setMode(startMode, true);
@@ -890,7 +934,7 @@
     var isExpense = e.source !== 'loan' && e.mode === 'sub';
     el.entryCatBlock.hidden = !isExpense;
     entryCat = e.cat || 'other';
-    if (isExpense) renderChips(el.entryChips, entryCat, function (cid) { entryCat = cid; });
+    if (isExpense) renderCatButton('entryCatPick', entryCat);
 
     var hint, blocked = false;
     if (e.source === 'loan') {
@@ -915,8 +959,6 @@
     el.entryDeleteHint.textContent = hint;
     el.entryDelete.disabled = blocked;
     openPanel(el.entrySheet);
-    var sel = el.entryChips.querySelector('.is-selected');
-    if (sel) setTimeout(function () { el.entryChips.scrollLeft = Math.max(0, sel.offsetLeft - 16); }, 30);
   }
 
   function saveEntry() {
@@ -984,7 +1026,7 @@
   }
 
   // Przeciąganie arkuszy w dół (zamykanie gestem)
-  [el.sheet, el.loansSheet, el.entrySheet].forEach(function (panel) {
+  [el.sheet, el.loansSheet, el.entrySheet, el.catSheet].forEach(function (panel) {
     var startY = 0, dy = 0, dragging = false;
     [panel.querySelector('.sheet-grabber'), panel.querySelector('.sheet-header')].forEach(function (h) {
       h.addEventListener('touchstart', function (e) {
@@ -1099,8 +1141,34 @@
   el.entryNote.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); saveEntry(); } });
   el.entryDelete.addEventListener('click', deleteEntry);
 
+  // Wybór grupy
+  el.catPickBtn.addEventListener('click', function () {
+    el.amountInput.blur(); el.noteInput.blur();
+    openCatPicker(selCat, function (id) { selCat = id; renderCatButton('catPick', id); });
+  });
+  el.entryCatPickBtn.addEventListener('click', function () {
+    el.entryNote.blur();
+    openCatPicker(entryCat, function (id) { entryCat = id; renderCatButton('entryCatPick', id); });
+  });
+  el.catCancel.addEventListener('click', function () { el.catSearch.blur(); closePanel(el.catSheet); });
+  el.catSearch.addEventListener('input', renderCatResults);
+  el.catSearch.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    var q = el.catSearch.value.trim();
+    if (!q) return;
+    var hits = catMatches(q);
+    if (hits.length) pickCat(hits[0].id); else createCatFromSearch();
+  });
+  el.catResults.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-pick]');
+    if (b) { pickCat(b.getAttribute('data-pick')); return; }
+    if (e.target.closest('[data-create]')) createCatFromSearch();
+  });
+
   el.backdrop.addEventListener('click', function () {
     if (el.actionSheet.classList.contains('is-open')) closeActions();
+    else if (el.catSheet.classList.contains('is-open')) closePanel(el.catSheet);
     else if (el.sheet.classList.contains('is-open')) closeEdit(false);
     else if (el.entrySheet.classList.contains('is-open')) closePanel(el.entrySheet);
     else if (el.loansSheet.classList.contains('is-open')) closePanel(el.loansSheet);
@@ -1108,6 +1176,7 @@
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Escape') return;
     if (el.actionSheet.classList.contains('is-open')) closeActions();
+    else if (el.catSheet.classList.contains('is-open')) closePanel(el.catSheet);
     else if (el.sheet.classList.contains('is-open')) closeEdit();
     else if (el.entrySheet.classList.contains('is-open')) closePanel(el.entrySheet);
     else if (el.loansSheet.classList.contains('is-open')) closePanel(el.loansSheet);
