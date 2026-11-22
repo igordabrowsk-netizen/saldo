@@ -596,3 +596,35 @@ button.hist-row:active { background: var(--fill-2); }
 .person-more { margin-top: 20px; }
 #personHistory .row-title { font-size: 16px; }
 .fill-all { display: block; margin: 8px auto 0; font-size: 15px; }
+
+/* ---------- Cała historia z filtrami ---------- */
+#historySheet { z-index: 51; }
+.hist-all { min-height: 48px; }
+.hist-all .row-title { color: var(--blue); }
+.hist-all-count { font-size: 15px; color: var(--label-2); font-variant-numeric: tabular-nums; }
+.hist-period-name { font-size: 17px; color: var(--label-2); white-space: nowrap; }
+.date-range { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+.date-field {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  background: var(--card); border-radius: var(--radius); padding: 0 6px 0 14px; min-height: 46px;
+  font-size: 15px; color: var(--label-2);
+}
+@media (prefers-color-scheme: dark) { .date-field { background: var(--card-2); } }
+.date-field input {
+  flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--blue);
+  font: inherit; font-size: 16px; text-align: right; -webkit-appearance: none; appearance: none;
+}
+.hist-type { margin-top: 12px; }
+.hist-type button { font-size: 13px; }
+.hist-summary { margin: 12px 4px 0; font-size: 13px; color: var(--label-2); }
+.hist-summary b { color: var(--label); font-weight: 600; }
+.day-header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin: 20px 16px 7px; font-size: 13px; color: var(--label-2);
+}
+.day-header span:first-child { font-weight: 600; color: var(--label); }
+.primary-btn--plain { background: var(--card); color: var(--blue); font-weight: 500; }
+@media (prefers-color-scheme: dark) { .primary-btn--plain { background: var(--card-2); } }
+#historySheet .danger-btn { margin-top: 24px; }
+.action-btn--bold { font-weight: 600; }
+.action-sheet { max-height: calc(100dvh - var(--safe-top) - 8px); overflow-y: auto; }

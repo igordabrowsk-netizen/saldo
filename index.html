@@ -95,10 +95,7 @@
     <p class="section-footer">Stuknij źródło, aby ustawić kwotę, dodać wpływ, zapisać wydatek albo przenieść pieniądze. Pożyczone pieniądze wliczają się do łącznej sumy.</p>
 
     <!-- Historia -->
-    <div class="section-header-row">
-      <h2 class="section-header">Historia zmian</h2>
-      <button class="text-btn" id="clearHistoryBtn" hidden>Wyczyść</button>
-    </div>
+    <h2 class="section-header">Ostatnie zmiany</h2>
     <ul class="group" id="history"></ul>
     <p class="section-footer" id="historyHint">Stuknij wpis, aby zmienić grupę lub notatkę albo usunąć go (kwota zostanie cofnięta).</p>
     <div class="empty" id="historyEmpty">
@@ -247,6 +244,46 @@
       </li>
     </ul>
     <p class="sheet-error" id="sheetError" hidden></p>
+  </section>
+
+  <!-- Cała historia z filtrami -->
+  <section class="sheet sheet--tall" id="historySheet" role="dialog" aria-modal="true" aria-labelledby="histTitle" hidden>
+    <div class="sheet-grabber"><span></span></div>
+    <div class="sheet-header">
+      <button class="text-btn" id="histClose">Zamknij</button>
+      <h3 class="sheet-title" id="histTitle">Historia</h3>
+      <span></span>
+    </div>
+    <div class="person-scroll">
+      <ul class="group group--sheet">
+        <li>
+          <button class="row hist-period" id="histPeriodBtn">
+            <span class="row-icon row-icon--blue"><span class="ic" data-icon="calendar"></span></span>
+            <span class="row-body"><span class="row-title">Okres</span></span>
+            <span class="hist-period-name" id="histPeriodName">Ten miesiąc</span>
+            <span class="row-chevron ic" data-icon="chevronRight"></span>
+          </button>
+        </li>
+      </ul>
+      <div class="date-range" id="histCustom" hidden>
+        <label class="date-field"><span>Od</span><input type="date" id="histFrom"></label>
+        <label class="date-field"><span>Do</span><input type="date" id="histTo"></label>
+      </div>
+      <div class="segmented hist-type" id="histType" role="tablist">
+        <span class="segmented-thumb"></span>
+        <button role="tab" data-htype="all" class="is-active">Wszystko</button>
+        <button role="tab" data-htype="exp">Wydatki</button>
+        <button role="tab" data-htype="inc">Wpływy</button>
+        <button role="tab" data-htype="loan">Pożyczki</button>
+      </div>
+      <p class="hist-summary" id="histSummary"></p>
+      <div id="histList"></div>
+      <div class="empty empty--sheet" id="histEmpty" hidden>
+        <span class="empty-icon ic" data-icon="history"></span>
+        <p>Brak wpisów w wybranym okresie.</p>
+      </div>
+      <button class="danger-btn" id="clearHistoryBtn">Wyczyść całą historię</button>
+    </div>
   </section>
 
   <!-- Ekran osoby (pożyczka) -->

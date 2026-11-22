@@ -234,6 +234,9 @@
     cashAmount: $('cashAmount'), bankAmount: $('bankAmount'), loansAmount: $('loansAmount'),
     cashUpdated: $('cashUpdated'), bankUpdated: $('bankUpdated'), loansSub: $('loansSub'), loansRow: $('loansRow'),
     history: $('history'), historyEmpty: $('historyEmpty'), clearHistoryBtn: $('clearHistoryBtn'),
+    historySheet: $('historySheet'), histClose: $('histClose'), histPeriodBtn: $('histPeriodBtn'), histPeriodName: $('histPeriodName'),
+    histCustom: $('histCustom'), histFrom: $('histFrom'), histTo: $('histTo'), histType: $('histType'),
+    histSummary: $('histSummary'), histList: $('histList'), histEmpty: $('histEmpty'),
     backdrop: $('backdrop'),
     sheet: $('sheet'), sheetTitle: $('sheetTitle'), sheetCancel: $('sheetCancel'), sheetSave: $('sheetSave'),
     modeControl: $('modeControl'), nameGroup: $('nameGroup'), nameInput: $('nameInput'),
@@ -265,7 +268,6 @@
   };
 
   // ---------- Render: Środki ----------
-  var historyShown = 15;
 
   function render() {
     renderHome();
@@ -367,30 +369,154 @@
     return '<span class="' + (extraCls || 'row-icon') + ' ' + d.cls + '"' + (d.bg ? ' style="background:' + d.bg + '"' : '') + '>' + icon(d.ic) + '</span>';
   }
 
+  // Jeden wiersz historii; timeOnly = w widoku dni pokazuj samą godzinę
+  function histRow(e, timeOnly) {
+    var d = describe(e);
+    var deltaTxt = e.mode === 'move' ? money(d.delta) : signed(d.delta);
+    var t = timeOnly ? timeFmt.format(new Date(e.at)) : when(e.at);
+    return '<li><button class="row hist-row" data-entry="' + esc(e.id) + '">' + iconBadge(d) +
+      '<span class="row-body"><span class="row-title">' + esc(d.title) + '</span><span class="row-sub">' + esc(d.sub + ' · ' + t) + '</span></span>' +
+      '<span class="hist-right"><span class="hist-delta amount ' + d.deltaCls + '">' + deltaTxt + '</span>' +
+      '<span class="hist-after amount">' + money(e.after) + '</span></span></button></li>';
+  }
+
+  var HOME_HISTORY = 5;
   function renderHistory() {
     var h = state.history;
     el.historyEmpty.hidden = h.length > 0;
     el.history.hidden = h.length === 0;
-    el.clearHistoryBtn.hidden = h.length === 0;
     $('historyHint').hidden = h.length === 0;
-    var items = h.slice(0, historyShown).map(function (e) {
-      var d = describe(e);
-      var editable = true;
-      var deltaTxt = e.mode === 'move' ? money(d.delta) : signed(d.delta);
-      var inner = iconBadge(d) +
-        '<span class="row-body"><span class="row-title">' + esc(d.title) + '</span><span class="row-sub">' + esc(d.sub + ' · ' + when(e.at)) + '</span></span>' +
-        '<span class="hist-right"><span class="hist-delta amount ' + d.deltaCls + '">' + deltaTxt + '</span>' +
-        '<span class="hist-after amount">' + money(e.after) + '</span></span>';
-      return editable
-        ? '<li><button class="row hist-row" data-entry="' + esc(e.id) + '">' + inner + '</button></li>'
-        : '<li><div class="row hist-row">' + inner + '</div></li>';
-    });
-    if (h.length > historyShown) {
-      items.push('<li><button class="hist-more" id="histMore">Pokaż więcej (' + (h.length - historyShown) + ')</button></li>');
+    var items = h.slice(0, HOME_HISTORY).map(function (e) { return histRow(e, false); });
+    if (h.length) {
+      items.push('<li><button class="row hist-all" id="histAll"><span class="row-body"><span class="row-title">Pokaż całą historię</span></span>' +
+        '<span class="hist-all-count">' + h.length + '</span><span class="row-chevron ic">' + icon('chevronRight') + '</span></button></li>');
     }
     el.history.innerHTML = items.join('');
-    var more = document.getElementById('histMore');
-    if (more) more.addEventListener('click', function () { historyShown += 30; renderHistory(); });
+    renderHistorySheet();
+  }
+
+  // ---------- Ekran całej historii z filtrami ----------
+  var HIST_PERIODS = [
+    { id: 'today', name: 'Dziś' },
+    { id: '7d', name: 'Ostatnie 7 dni' },
+    { id: '30d', name: 'Ostatnie 30 dni' },
+    { id: 'month', name: 'Ten miesiąc' },
+    { id: 'prev', name: 'Poprzedni miesiąc' },
+    { id: '3m', name: 'Ostatnie 3 miesiące' },
+    { id: 'year', name: 'Ten rok' },
+    { id: 'all', name: 'Wszystko' },
+    { id: 'custom', name: 'Własny zakres' }
+  ];
+  var histFilter = { period: 'month', type: 'all', from: '', to: '' };
+  var histLimit = 100;
+
+  function ymd(d) {
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+  function parseYmd(s) { var a = String(s).split('-').map(Number); return a.length === 3 && a[0] ? new Date(a[0], a[1] - 1, a[2]) : null; }
+
+  function periodRange() {
+    var n = new Date(), y = n.getFullYear(), m = n.getMonth(), d = n.getDate();
+    var INF = Infinity;
+    switch (histFilter.period) {
+      case 'today': return [new Date(y, m, d).getTime(), INF];
+      case '7d': return [new Date(y, m, d - 6).getTime(), INF];
+      case '30d': return [new Date(y, m, d - 29).getTime(), INF];
+      case 'month': return [new Date(y, m, 1).getTime(), INF];
+      case 'prev': return [new Date(y, m - 1, 1).getTime(), new Date(y, m, 1).getTime()];
+      case '3m': return [new Date(y, m - 2, 1).getTime(), INF];
+      case 'year': return [new Date(y, 0, 1).getTime(), INF];
+      case 'custom':
+        var f = parseYmd(histFilter.from), t = parseYmd(histFilter.to);
+        var a = f ? f.getTime() : 0;
+        var b = t ? new Date(t.getFullYear(), t.getMonth(), t.getDate() + 1).getTime() : INF;
+        return a <= b ? [a, b] : [b, a];
+      default: return [0, INF];
+    }
+  }
+  function matchesType(e) {
+    var t = histFilter.type;
+    if (t === 'all') return true;
+    if (t === 'loan') return e.source === 'loan';
+    if (e.source === 'loan') return false;
+    return t === 'exp' ? e.mode === 'sub' : e.mode === 'add';
+  }
+  function dayLabel(ts) {
+    var diff = Math.round((startOfDay(Date.now()) - startOfDay(ts)) / 86400000);
+    if (diff === 0) return 'Dziś';
+    if (diff === 1) return 'Wczoraj';
+    var d = new Date(ts);
+    var opts = { weekday: 'long', day: 'numeric', month: 'long' };
+    if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+    var s = new Intl.DateTimeFormat('pl-PL', opts).format(d);
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  function renderHistorySheet() {
+    if (!isOpen(el.historySheet)) return;
+    var p = HIST_PERIODS.filter(function (x) { return x.id === histFilter.period; })[0];
+    el.histPeriodName.textContent = p.name;
+    el.histCustom.hidden = histFilter.period !== 'custom';
+    setSegment(el.histType, 'data-htype', histFilter.type);
+
+    var r = periodRange();
+    var list = state.history.filter(function (e) { return e.at >= r[0] && e.at < r[1] && matchesType(e); });
+    var exp = 0, inc = 0;
+    list.forEach(function (e) {
+      if (e.source === 'loan') return;
+      if (e.mode === 'sub') exp += e.before - e.after;
+      if (e.mode === 'add') inc += e.after - e.before;
+    });
+    var parts = [plural(list.length, 'wpis', 'wpisy', 'wpisów')];
+    if (inc) parts.push('wpływy <b>' + money(inc) + '</b>');
+    if (exp) parts.push('wydatki <b>' + money(exp) + '</b>');
+    el.histSummary.innerHTML = parts.join(' · ');
+
+    var html = '', curDay = null, dayItems = [], dayExp = 0, shown = 0;
+    var flush = function () {
+      if (curDay === null) return;
+      html += '<div class="day-header"><span>' + esc(dayLabel(curDay)) + '</span>' + (dayExp ? '<span class="amount">' + money(-dayExp) + '</span>' : '') + '</div>' +
+        '<ul class="group group--sheet">' + dayItems.join('') + '</ul>';
+    };
+    for (var i = 0; i < list.length && shown < histLimit; i++, shown++) {
+      var e = list[i];
+      var k = startOfDay(e.at);
+      if (k !== curDay) { flush(); curDay = k; dayItems = []; dayExp = 0; }
+      dayItems.push(histRow(e, true));
+      if (e.source !== 'loan' && e.mode === 'sub') dayExp += e.before - e.after;
+    }
+    flush();
+    if (list.length > histLimit) html += '<button class="primary-btn primary-btn--plain" id="histMoreBtn">Pokaż więcej (' + (list.length - histLimit) + ')</button>';
+    el.histList.innerHTML = html;
+    el.histEmpty.hidden = list.length > 0;
+  }
+
+  function openHistory() {
+    histLimit = 100;
+    openPanel(el.historySheet);
+    renderHistorySheet();
+    el.historySheet.querySelector('.person-scroll').scrollTop = 0;
+  }
+
+  function choosePeriod() {
+    actionChoices('Pokaż wpisy z okresu', HIST_PERIODS.map(function (p) {
+      return {
+        text: p.name, bold: p.id === histFilter.period,
+        cb: function () {
+          histFilter.period = p.id;
+          if (p.id === 'custom' && !histFilter.from) {
+            var n = new Date();
+            histFilter.from = ymd(new Date(n.getFullYear(), n.getMonth(), 1));
+            histFilter.to = ymd(n);
+            el.histFrom.value = histFilter.from;
+            el.histTo.value = histFilter.to;
+          }
+          histLimit = 100;
+          renderHistorySheet();
+        }
+      };
+    }));
   }
 
   // ---------- Statystyki ----------
@@ -625,7 +751,7 @@
   }
 
   // ---------- Arkusze (wspólne) ----------
-  var PANELS = [el.sheet, el.loansSheet, el.personSheet, el.entrySheet, el.catSheet, el.actionSheet];
+  var PANELS = [el.sheet, el.loansSheet, el.personSheet, el.historySheet, el.entrySheet, el.catSheet, el.actionSheet];
   // Stan „otwarty” trzymamy w data-open (ustawiany od razu), a klasę is-open dokładamy w klatce animacji
   // tylko jeśli panel nadal ma być otwarty — szybkie „otwórz i zamknij” nie zostawi otwartego arkusza.
   function isOpen(panel) { return panel.dataset.open === '1'; }
@@ -1068,7 +1194,7 @@
   }
 
   // Przeciąganie arkuszy w dół (zamykanie gestem)
-  [el.sheet, el.loansSheet, el.personSheet, el.entrySheet, el.catSheet].forEach(function (panel) {
+  [el.sheet, el.loansSheet, el.personSheet, el.historySheet, el.entrySheet, el.catSheet].forEach(function (panel) {
     var startY = 0, dy = 0, dragging = false;
     [panel.querySelector('.sheet-grabber'), panel.querySelector('.sheet-header')].forEach(function (h) {
       h.addEventListener('touchstart', function (e) {
@@ -1099,7 +1225,7 @@
     el.actionGroup.querySelectorAll('.action-btn').forEach(function (b) { b.remove(); });
     buttons.forEach(function (btn) {
       var b = document.createElement('button');
-      b.className = 'action-btn' + (btn.danger ? ' action-btn--danger' : '');
+      b.className = 'action-btn' + (btn.danger ? ' action-btn--danger' : '') + (btn.bold ? ' action-btn--bold' : '');
       b.textContent = btn.text;
       b.addEventListener('click', function () { closeActions(); btn.cb(); });
       el.actionGroup.appendChild(b);
@@ -1222,6 +1348,7 @@
     else if (isOpen(el.sheet)) closeEdit(false);
     else if (isOpen(el.entrySheet)) closePanel(el.entrySheet);
     else if (isOpen(el.personSheet)) closePerson();
+    else if (isOpen(el.historySheet)) closePanel(el.historySheet);
     else if (isOpen(el.loansSheet)) closePanel(el.loansSheet);
   });
   document.addEventListener('keydown', function (e) {
@@ -1231,12 +1358,38 @@
     else if (isOpen(el.sheet)) closeEdit();
     else if (isOpen(el.entrySheet)) closePanel(el.entrySheet);
     else if (isOpen(el.personSheet)) closePerson();
+    else if (isOpen(el.historySheet)) closePanel(el.historySheet);
     else if (isOpen(el.loansSheet)) closePanel(el.loansSheet);
   });
 
+  // Historia
+  el.history.addEventListener('click', function (e) {
+    if (e.target.closest('#histAll')) openHistory();
+  });
+  el.histClose.addEventListener('click', function () { closePanel(el.historySheet); });
+  el.histPeriodBtn.addEventListener('click', choosePeriod);
+  el.histType.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-htype]');
+    if (!b) return;
+    histFilter.type = b.getAttribute('data-htype');
+    histLimit = 100;
+    renderHistorySheet();
+  });
+  [el.histFrom, el.histTo].forEach(function (inp) {
+    inp.addEventListener('change', function () {
+      histFilter.from = el.histFrom.value;
+      histFilter.to = el.histTo.value;
+      renderHistorySheet();
+    });
+  });
+  el.histList.addEventListener('click', function (e) {
+    if (e.target.closest('#histMoreBtn')) { histLimit += 200; renderHistorySheet(); return; }
+    var b = e.target.closest('[data-entry]');
+    if (b) openEntry(b.getAttribute('data-entry'));
+  });
   el.clearHistoryBtn.addEventListener('click', function () {
     confirmAction('Wyczyścić całą historię zmian? Kwoty zostaną bez zmian, ale statystyki wydatków i odkładania też zostaną wyczyszczone.', 'Wyczyść historię', function () {
-      state.history = []; historyShown = 15; save(); render(); toast('Historia wyczyszczona');
+      state.history = []; save(); render(); closePanel(el.historySheet); toast('Historia wyczyszczona');
     });
   });
   el.actionCancel.addEventListener('click', closeActions);
