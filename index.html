@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
   <title>Saldo</title>
-  <meta name="description" content="Kontrola środków: gotówka, konto i łączna suma.">
+  <meta name="description" content="Kontrola środków: gotówka, konto, pożyczki, wydatki i statystyki.">
 
   <!-- iOS PWA -->
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -23,19 +23,17 @@
   <!-- Pasek nawigacji (mały tytuł pojawia się po przewinięciu) -->
   <header class="navbar" id="navbar">
     <div class="navbar-inner">
-      <span class="navbar-side"></span>
-      <span class="navbar-title">Środki</span>
-      <button class="icon-btn" id="privacyBtnSmall" aria-label="Ukryj kwoty"></button>
+      <span class="navbar-title" id="navbarTitle">Środki</span>
     </div>
   </header>
 
-  <main class="page" id="page">
+  <!-- ================= ŚRODKI ================= -->
+  <main class="page view" id="viewHome">
     <div class="large-title-row">
       <div>
         <p class="eyebrow" id="today"></p>
         <h1 class="large-title">Środki</h1>
       </div>
-      <button class="icon-btn icon-btn--filled" id="privacyBtn" aria-label="Ukryj kwoty"></button>
     </div>
 
     <!-- Łączna suma -->
@@ -94,7 +92,7 @@
         </button>
       </li>
     </ul>
-    <p class="section-footer">Stuknij źródło, aby ustawić kwotę albo dodać lub odjąć środki. Pożyczone pieniądze wliczają się do łącznej sumy.</p>
+    <p class="section-footer">Stuknij źródło, aby ustawić kwotę, dodać wpływ, zapisać wydatek albo przenieść pieniądze. Pożyczone pieniądze wliczają się do łącznej sumy.</p>
 
     <!-- Historia -->
     <div class="section-header-row">
@@ -108,10 +106,75 @@
     </div>
   </main>
 
+  <!-- ================= STATYSTYKI ================= -->
+  <main class="page view" id="viewStats" hidden>
+    <div class="large-title-row">
+      <div>
+        <p class="eyebrow">Wpływy i wydatki</p>
+        <h1 class="large-title">Statystyki</h1>
+      </div>
+    </div>
+
+    <div class="month-switch">
+      <button class="icon-btn" id="monthPrev" aria-label="Poprzedni miesiąc"><span class="ic" data-icon="chevronLeft"></span></button>
+      <span class="month-label" id="monthLabel"></span>
+      <button class="icon-btn" id="monthNext" aria-label="Następny miesiąc"><span class="ic" data-icon="chevronRight"></span></button>
+    </div>
+
+    <section class="card savings-card">
+      <span class="card-label"><span class="ic" data-icon="piggyBank"></span><span id="savingsLabel">Odłożone</span></span>
+      <div class="savings-amount" id="savingsAmount">0,00 zł</div>
+      <p class="savings-rate" id="savingsRate"></p>
+    </section>
+    <div class="tiles">
+      <div class="card tile">
+        <span class="card-label"><span class="tile-icon tile-icon--in ic" data-icon="arrowDownLeft"></span>Wpływy</span>
+        <b class="tile-value" id="incomeAmount">0,00 zł</b>
+      </div>
+      <div class="card tile">
+        <span class="card-label"><span class="tile-icon tile-icon--out ic" data-icon="arrowUpRight"></span>Wydatki</span>
+        <b class="tile-value" id="expenseAmount">0,00 zł</b>
+      </div>
+    </div>
+
+    <h2 class="section-header">Odkładanie miesięcznie</h2>
+    <section class="card chart-card">
+      <div class="chart-wrap" id="savingsChart"></div>
+      <p class="chart-caption" id="savingsCaption"></p>
+    </section>
+
+    <h2 class="section-header">Wydatki według grup</h2>
+    <ul class="group" id="catStats"></ul>
+    <div class="empty" id="catStatsEmpty">
+      <span class="empty-icon ic" data-icon="chartColumn"></span>
+      <p>Brak wydatków w tym miesiącu.</p>
+    </div>
+
+    <h2 class="section-header">Wydatki dzień po dniu</h2>
+    <section class="card chart-card">
+      <p class="chart-readout" id="dailyReadout"></p>
+      <div class="chart-wrap" id="dailyChart"></div>
+    </section>
+
+    <div class="section-header-row">
+      <h2 class="section-header">Twoje grupy</h2>
+      <button class="text-btn" id="addCatBtn">Dodaj</button>
+    </div>
+    <ul class="group" id="customCats"></ul>
+    <p class="section-footer" id="customCatsHint">Własne grupy dodasz tutaj albo przy zapisywaniu wydatku.</p>
+    <p class="section-footer stats-footnote">Statystyki liczą wpływy (Dodaj) i wydatki (Odejmij) z gotówki i konta. Korekty stanu, przeniesienia i pożyczki nie są wliczane.</p>
+  </main>
+
+  <!-- Dolny pasek kart -->
+  <nav class="tabbar" id="tabbar">
+    <button class="tab is-active" data-tab="home"><span class="ic" data-icon="wallet"></span><span>Środki</span></button>
+    <button class="tab" data-tab="stats"><span class="ic" data-icon="chartColumn"></span><span>Statystyki</span></button>
+  </nav>
+
   <!-- Arkusz edycji kwoty -->
   <div class="backdrop" id="backdrop" hidden></div>
   <section class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>
-    <div class="sheet-grabber" id="sheetGrabber"><span></span></div>
+    <div class="sheet-grabber"><span></span></div>
     <div class="sheet-header">
       <button class="text-btn" id="sheetCancel">Anuluj</button>
       <h3 class="sheet-title" id="sheetTitle">Gotówka</h3>
@@ -123,6 +186,7 @@
       <button role="tab" data-mode="set" class="is-active">Ustaw</button>
       <button role="tab" data-mode="add">Dodaj</button>
       <button role="tab" data-mode="sub">Odejmij</button>
+      <button role="tab" data-mode="move">Przenieś</button>
     </div>
 
     <ul class="group group--sheet" id="nameGroup" hidden>
@@ -146,6 +210,13 @@
     <div class="sheet-preview" id="sheetPreview">
       Nowy stan: <b id="previewValue">0,00 zł</b>
     </div>
+
+    <div class="cat-block" id="catBlock" hidden>
+      <p class="field-label">Grupa wydatku</p>
+      <div class="chips" id="catChips"></div>
+    </div>
+
+    <p class="field-hint" id="moveHint" hidden></p>
 
     <div class="fund-block" id="fundBlock" hidden>
       <p class="field-label" id="fundLabel">Pieniądze z</p>
@@ -189,6 +260,33 @@
     <p class="section-footer">Stuknij osobę, aby zapisać zwrot albo dopisać kolejną pożyczkę.</p>
   </section>
 
+  <!-- Arkusz szczegółów wpisu historii -->
+  <section class="sheet" id="entrySheet" role="dialog" aria-modal="true" aria-labelledby="entryTitle" hidden>
+    <div class="sheet-grabber"><span></span></div>
+    <div class="sheet-header">
+      <button class="text-btn" id="entryCancel">Anuluj</button>
+      <h3 class="sheet-title" id="entryTitle">Szczegóły</h3>
+      <button class="text-btn text-btn--bold" id="entrySave">Zapisz</button>
+    </div>
+    <div class="entry-hero">
+      <span class="entry-icon" id="entryIcon"></span>
+      <b class="entry-amount amount" id="entryAmount"></b>
+      <span class="entry-meta" id="entryMeta"></span>
+    </div>
+    <div class="cat-block" id="entryCatBlock" hidden>
+      <p class="field-label">Grupa wydatku</p>
+      <div class="chips" id="entryChips"></div>
+    </div>
+    <ul class="group group--sheet">
+      <li class="row row--input">
+        <span class="row-icon row-icon--gray"><span class="ic" data-icon="pencil"></span></span>
+        <input id="entryNote" type="text" maxlength="60" placeholder="Notatka (opcjonalnie)" autocomplete="off">
+      </li>
+    </ul>
+    <button class="danger-btn" id="entryDelete">Usuń wpis</button>
+    <p class="section-footer" id="entryDeleteHint"></p>
+  </section>
+
   <!-- Arkusz akcji (potwierdzenie) -->
   <div class="action-sheet" id="actionSheet" hidden>
     <div class="action-group">
@@ -200,6 +298,7 @@
 
   <div class="toast" id="toast" hidden><span class="ic" data-icon="check"></span><span id="toastText"></span></div>
 
+  <script src="icons.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
