@@ -48,10 +48,12 @@
       <div class="split-bar" aria-hidden="true">
         <span class="split-cash" id="splitCash"></span>
         <span class="split-bank" id="splitBank"></span>
+        <span class="split-loan" id="splitLoan"></span>
       </div>
       <div class="split-legend">
         <span><i class="dot dot-cash"></i>Gotówka <b id="pctCash">0%</b></span>
         <span><i class="dot dot-bank"></i>Konto <b id="pctBank">0%</b></span>
+        <span id="legendLoan"><i class="dot dot-loan"></i>Pożyczone <b id="pctLoan">0%</b></span>
       </div>
     </section>
 
@@ -80,8 +82,19 @@
           <span class="row-chevron ic" data-icon="chevronRight"></span>
         </button>
       </li>
+      <li>
+        <button class="row" id="loansRow">
+          <span class="row-icon row-icon--orange"><span class="ic" data-icon="handCoins"></span></span>
+          <span class="row-body">
+            <span class="row-title">Pożyczone</span>
+            <span class="row-sub" id="loansSub">Stuknij, aby dodać</span>
+          </span>
+          <span class="row-value amount" id="loansAmount">0,00 zł</span>
+          <span class="row-chevron ic" data-icon="chevronRight"></span>
+        </button>
+      </li>
     </ul>
-    <p class="section-footer">Stuknij źródło, aby ustawić kwotę albo dodać lub odjąć środki.</p>
+    <p class="section-footer">Stuknij źródło, aby ustawić kwotę albo dodać lub odjąć środki. Pożyczone pieniądze wliczają się do łącznej sumy.</p>
 
     <!-- Historia -->
     <div class="section-header-row">
@@ -106,11 +119,18 @@
     </div>
 
     <div class="segmented" id="modeControl" role="tablist">
-      <span class="segmented-thumb" id="segThumb"></span>
+      <span class="segmented-thumb"></span>
       <button role="tab" data-mode="set" class="is-active">Ustaw</button>
       <button role="tab" data-mode="add">Dodaj</button>
       <button role="tab" data-mode="sub">Odejmij</button>
     </div>
+
+    <ul class="group group--sheet" id="nameGroup" hidden>
+      <li class="row row--input">
+        <span class="row-icon row-icon--orange"><span class="ic" data-icon="user"></span></span>
+        <input id="nameInput" type="text" maxlength="30" placeholder="Komu pożyczasz?" autocomplete="off" enterkeyhint="next">
+      </li>
+    </ul>
 
     <div class="sheet-current">
       <span id="sheetCurrentLabel">Obecnie</span>
@@ -127,6 +147,17 @@
       Nowy stan: <b id="previewValue">0,00 zł</b>
     </div>
 
+    <div class="fund-block" id="fundBlock" hidden>
+      <p class="field-label" id="fundLabel">Pieniądze z</p>
+      <div class="segmented" id="fundControl" role="tablist">
+        <span class="segmented-thumb"></span>
+        <button role="tab" data-fund="cash" class="is-active">Gotówka</button>
+        <button role="tab" data-fund="bank">Konto</button>
+        <button role="tab" data-fund="none">Bez zmian</button>
+      </div>
+      <p class="field-hint" id="fundHint"></p>
+    </div>
+
     <ul class="group group--sheet">
       <li class="row row--input">
         <span class="row-icon row-icon--gray"><span class="ic" data-icon="pencil"></span></span>
@@ -134,15 +165,37 @@
       </li>
     </ul>
     <p class="sheet-error" id="sheetError" hidden></p>
+    <button class="danger-btn" id="deleteLoanBtn" hidden>Usuń pożyczkę</button>
+  </section>
+
+  <!-- Arkusz listy pożyczek -->
+  <section class="sheet" id="loansSheet" role="dialog" aria-modal="true" aria-labelledby="loansTitle" hidden>
+    <div class="sheet-grabber"><span></span></div>
+    <div class="sheet-header">
+      <button class="text-btn" id="loansClose">Zamknij</button>
+      <h3 class="sheet-title" id="loansTitle">Pożyczone</h3>
+      <button class="icon-btn" id="loansAdd" aria-label="Nowa pożyczka"><span class="ic" data-icon="plus"></span></button>
+    </div>
+    <div class="loans-summary">
+      <span>Łącznie do oddania</span>
+      <b class="amount" id="loansTotal">0,00 zł</b>
+    </div>
+    <ul class="group group--sheet" id="loanList"></ul>
+    <div class="empty empty--sheet" id="loansEmpty">
+      <span class="empty-icon ic" data-icon="handCoins"></span>
+      <p>Nikt nie jest Ci winien pieniędzy.</p>
+    </div>
+    <button class="primary-btn" id="loansAddBig"><span class="ic" data-icon="plus"></span>Nowa pożyczka</button>
+    <p class="section-footer">Stuknij osobę, aby zapisać zwrot albo dopisać kolejną pożyczkę.</p>
   </section>
 
   <!-- Arkusz akcji (potwierdzenie) -->
   <div class="action-sheet" id="actionSheet" hidden>
     <div class="action-group">
-      <p class="action-title">Wyczyścić całą historię zmian? Kwoty zostaną bez zmian.</p>
-      <button class="action-btn action-btn--danger" id="confirmClear">Wyczyść historię</button>
+      <p class="action-title" id="actionTitle"></p>
+      <button class="action-btn action-btn--danger" id="actionConfirm"></button>
     </div>
-    <button class="action-btn action-btn--cancel" id="cancelClear">Anuluj</button>
+    <button class="action-btn action-btn--cancel" id="actionCancel">Anuluj</button>
   </div>
 
   <div class="toast" id="toast" hidden><span class="ic" data-icon="check"></span><span id="toastText"></span></div>

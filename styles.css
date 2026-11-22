@@ -161,11 +161,13 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .split-bar span { height: 100%; transition: width .4s cubic-bezier(.2,.8,.2,1); }
 .split-cash { background: #a7f3c0; width: 0; border-radius: 3px; }
 .split-bank { background: #ffffff; width: 0; border-radius: 3px; }
-.split-legend { position: relative; z-index: 1; display: flex; gap: 16px; margin-top: 10px; font-size: 13px; opacity: .92; }
+.split-loan { background: #ffd28a; width: 0; border-radius: 3px; }
+.split-legend { position: relative; z-index: 1; display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; font-size: 13px; opacity: .92; }
 .split-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot-cash { background: #a7f3c0; }
 .dot-bank { background: #ffffff; }
+.dot-loan { background: #ffd28a; }
 
 /* ---------- Listy grupowane ---------- */
 .section-header {
@@ -201,6 +203,7 @@ button.row:active { background: var(--fill-2); }
 .row-icon--gray { background: var(--gray); }
 .row-icon--red { background: var(--red); }
 .row-icon--indigo { background: var(--indigo); }
+.row-icon--orange { background: var(--orange); }
 .row-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .row-title { font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row-sub { font-size: 13px; color: var(--label-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -359,3 +362,41 @@ body.privacy .amount-masked { letter-spacing: 0.08em; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; }
 }
+
+/* ---------- Pożyczki ---------- */
+.group--sheet + .sheet-current, #nameGroup { margin-top: 14px; }
+.field-label { margin: 4px 4px 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .02em; color: var(--label-2); }
+.field-hint { margin: 8px 4px 16px; font-size: 13px; color: var(--label-2); min-height: 17px; }
+.field-hint b { color: var(--label); font-weight: 600; }
+.fund-block { margin-bottom: 4px; }
+
+.loans-summary {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin: 4px 4px 14px; font-size: 15px; color: var(--label-2);
+}
+.loans-summary b { font-size: 22px; color: var(--label); font-weight: 700; }
+.avatar {
+  width: 36px; height: 36px; border-radius: 50%; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--orange); color: #fff; font-size: 14px; font-weight: 600; letter-spacing: .02em;
+}
+#loanList > li + li::before { left: 64px; }
+.empty--sheet { background: var(--card); }
+@media (prefers-color-scheme: dark) { .empty--sheet { background: var(--card-2); } }
+#loanList:empty { display: none; }
+
+.primary-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; height: 50px; margin-top: 14px; border-radius: 12px;
+  background: var(--blue); color: #fff; font-size: 17px; font-weight: 600;
+}
+.primary-btn .ic { font-size: 20px; }
+.primary-btn:active { opacity: .7; }
+.danger-btn {
+  display: block; width: 100%; height: 50px; margin-top: 14px; border-radius: 12px;
+  background: var(--card); color: var(--red); font-size: 17px;
+}
+@media (prefers-color-scheme: dark) { .danger-btn { background: var(--card-2); } }
+.danger-btn:active { background: var(--fill-2); }
+.hist-delta.loan { color: var(--orange); }
+#loansAdd { font-size: 24px; justify-self: end; }
