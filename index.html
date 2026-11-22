@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <title>Saldo</title>
+  <meta name="description" content="Kontrola środków: gotówka, konto i łączna suma.">
+
+  <!-- iOS PWA -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Saldo">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Pasek nawigacji (mały tytuł pojawia się po przewinięciu) -->
+  <header class="navbar" id="navbar">
+    <div class="navbar-inner">
+      <span class="navbar-side"></span>
+      <span class="navbar-title">Środki</span>
+      <button class="icon-btn" id="privacyBtnSmall" aria-label="Ukryj kwoty"></button>
+    </div>
+  </header>
+
+  <main class="page" id="page">
+    <div class="large-title-row">
+      <div>
+        <p class="eyebrow" id="today"></p>
+        <h1 class="large-title">Środki</h1>
+      </div>
+      <button class="icon-btn icon-btn--filled" id="privacyBtn" aria-label="Ukryj kwoty"></button>
+    </div>
+
+    <!-- Łączna suma -->
+    <section class="total-card" aria-label="Łączna suma środków">
+      <div class="total-head">
+        <span class="total-label"><span class="ic" data-icon="wallet"></span>Łączna suma</span>
+        <span class="total-updated" id="totalUpdated"></span>
+      </div>
+      <div class="total-amount amount" id="totalAmount">0,00 zł</div>
+      <div class="split-bar" aria-hidden="true">
+        <span class="split-cash" id="splitCash"></span>
+        <span class="split-bank" id="splitBank"></span>
+      </div>
+      <div class="split-legend">
+        <span><i class="dot dot-cash"></i>Gotówka <b id="pctCash">0%</b></span>
+        <span><i class="dot dot-bank"></i>Konto <b id="pctBank">0%</b></span>
+      </div>
+    </section>
+
+    <!-- Źródła środków -->
+    <h2 class="section-header">Źródła</h2>
+    <ul class="group" id="sources">
+      <li>
+        <button class="row" data-source="cash">
+          <span class="row-icon row-icon--green"><span class="ic" data-icon="banknote"></span></span>
+          <span class="row-body">
+            <span class="row-title">Gotówka</span>
+            <span class="row-sub" id="cashUpdated">Brak danych</span>
+          </span>
+          <span class="row-value amount" id="cashAmount">0,00 zł</span>
+          <span class="row-chevron ic" data-icon="chevronRight"></span>
+        </button>
+      </li>
+      <li>
+        <button class="row" data-source="bank">
+          <span class="row-icon row-icon--blue"><span class="ic" data-icon="landmark"></span></span>
+          <span class="row-body">
+            <span class="row-title">Konto bankowe</span>
+            <span class="row-sub" id="bankUpdated">Brak danych</span>
+          </span>
+          <span class="row-value amount" id="bankAmount">0,00 zł</span>
+          <span class="row-chevron ic" data-icon="chevronRight"></span>
+        </button>
+      </li>
+    </ul>
+    <p class="section-footer">Stuknij źródło, aby ustawić kwotę albo dodać lub odjąć środki.</p>
+
+    <!-- Historia -->
+    <div class="section-header-row">
+      <h2 class="section-header">Historia zmian</h2>
+      <button class="text-btn" id="clearHistoryBtn" hidden>Wyczyść</button>
+    </div>
+    <ul class="group" id="history"></ul>
+    <div class="empty" id="historyEmpty">
+      <span class="empty-icon ic" data-icon="history"></span>
+      <p>Tu pojawią się zmiany stanu gotówki i konta.</p>
+    </div>
+  </main>
+
+  <!-- Arkusz edycji kwoty -->
+  <div class="backdrop" id="backdrop" hidden></div>
+  <section class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>
+    <div class="sheet-grabber" id="sheetGrabber"><span></span></div>
+    <div class="sheet-header">
+      <button class="text-btn" id="sheetCancel">Anuluj</button>
+      <h3 class="sheet-title" id="sheetTitle">Gotówka</h3>
+      <button class="text-btn text-btn--bold" id="sheetSave">Zapisz</button>
+    </div>
+
+    <div class="segmented" id="modeControl" role="tablist">
+      <span class="segmented-thumb" id="segThumb"></span>
+      <button role="tab" data-mode="set" class="is-active">Ustaw</button>
+      <button role="tab" data-mode="add">Dodaj</button>
+      <button role="tab" data-mode="sub">Odejmij</button>
+    </div>
+
+    <div class="sheet-current">
+      <span id="sheetCurrentLabel">Obecnie</span>
+      <b class="amount" id="sheetCurrent">0,00 zł</b>
+    </div>
+
+    <label class="amount-field" for="amountInput">
+      <span class="amount-sign" id="amountSign"></span>
+      <input id="amountInput" type="text" inputmode="decimal" autocomplete="off" placeholder="0,00" aria-label="Kwota">
+      <span class="amount-currency">zł</span>
+    </label>
+
+    <div class="sheet-preview" id="sheetPreview">
+      Nowy stan: <b id="previewValue">0,00 zł</b>
+    </div>
+
+    <ul class="group group--sheet">
+      <li class="row row--input">
+        <span class="row-icon row-icon--gray"><span class="ic" data-icon="pencil"></span></span>
+        <input id="noteInput" type="text" maxlength="60" placeholder="Notatka (opcjonalnie)" autocomplete="off">
+      </li>
+    </ul>
+    <p class="sheet-error" id="sheetError" hidden></p>
+  </section>
+
+  <!-- Arkusz akcji (potwierdzenie) -->
+  <div class="action-sheet" id="actionSheet" hidden>
+    <div class="action-group">
+      <p class="action-title">Wyczyścić całą historię zmian? Kwoty zostaną bez zmian.</p>
+      <button class="action-btn action-btn--danger" id="confirmClear">Wyczyść historię</button>
+    </div>
+    <button class="action-btn action-btn--cancel" id="cancelClear">Anuluj</button>
+  </div>
+
+  <div class="toast" id="toast" hidden><span class="ic" data-icon="check"></span><span id="toastText"></span></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
