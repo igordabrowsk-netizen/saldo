@@ -324,9 +324,10 @@
     el.historyEmpty.hidden = h.length > 0;
     el.history.hidden = h.length === 0;
     el.clearHistoryBtn.hidden = h.length === 0;
+    $('historyHint').hidden = h.length === 0;
     var items = h.slice(0, historyShown).map(function (e) {
       var d = describe(e);
-      var editable = e.source !== 'loan';
+      var editable = true;
       var deltaTxt = e.mode === 'move' ? money(d.delta) : signed(d.delta);
       var inner = iconBadge(d) +
         '<span class="row-body"><span class="row-title">' + esc(d.title) + '</span><span class="row-sub">' + esc(d.sub + ' · ' + when(e.at)) + '</span></span>' +
@@ -886,19 +887,33 @@
     el.entryAmount.textContent = e.mode === 'move' ? money(e.amount) : signed(d.delta);
     el.entryMeta.textContent = d.sub + ' · ' + fullFmt.format(new Date(e.at));
     el.entryNote.value = e.note || '';
-    el.entryCatBlock.hidden = e.mode !== 'sub';
+    var isExpense = e.source !== 'loan' && e.mode === 'sub';
+    el.entryCatBlock.hidden = !isExpense;
     entryCat = e.cat || 'other';
-    if (e.mode === 'sub') renderChips(el.entryChips, entryCat, function (cid) { entryCat = cid; });
+    if (isExpense) renderChips(el.entryChips, entryCat, function (cid) { entryCat = cid; });
 
-    var src = SOURCES[e.source].short;
-    var amt = Math.abs(e.after - e.before);
-    var hint = {
-      add: src + ' zmniejszy się o ' + money(amt) + '.',
-      sub: src + ' wzrośnie o ' + money(amt) + '.',
-      set: src + ' zmieni się o ' + signed(e.before - e.after) + '.',
-      move: src + ' wzrośnie, a ' + (e.to ? SOURCES[e.to].short.toLowerCase() : '') + ' zmniejszy się o ' + money(e.amount || 0) + '.'
-    }[e.mode] || '';
-    el.entryDeleteHint.textContent = 'Usunięcie cofnie ten wpis: ' + hint;
+    var hint, blocked = false;
+    if (e.source === 'loan') {
+      var r = loanRevert(e);
+      if (r.next < 0) {
+        blocked = true;
+        hint = 'Nie można usunąć: ' + e.name + ' ma teraz do oddania ' + money(r.cur) + ', a ten wpis dotyczy ' + money(Math.abs(r.d)) + '. Usuń najpierw nowsze wpisy tej osoby.';
+      } else {
+        hint = 'Usunięcie cofnie ten wpis. Pożyczka (' + e.name + '): ' + money(r.cur) + ' → ' + money(r.next) + '. ' +
+          (r.fund ? SOURCES[r.fund].short + ': ' + money(state[r.fund]) + ' → ' + money(state[r.fund] + r.d) + '.' : 'Łączna suma zmieni się o ' + signed(-r.d) + '.');
+      }
+    } else {
+      var src = SOURCES[e.source].short;
+      var amt = Math.abs(e.after - e.before);
+      hint = 'Usunięcie cofnie ten wpis: ' + ({
+        add: src + ' zmniejszy się o ' + money(amt) + '.',
+        sub: src + ' wzrośnie o ' + money(amt) + '.',
+        set: src + ' zmieni się o ' + signed(e.before - e.after) + '.',
+        move: src + ' wzrośnie, a ' + (e.to ? SOURCES[e.to].short.toLowerCase() : '') + ' zmniejszy się o ' + money(e.amount || 0) + '.'
+      }[e.mode] || '');
+    }
+    el.entryDeleteHint.textContent = hint;
+    el.entryDelete.disabled = blocked;
     openPanel(el.entrySheet);
     var sel = el.entryChips.querySelector('.is-selected');
     if (sel) setTimeout(function () { el.entryChips.scrollLeft = Math.max(0, sel.offsetLeft - 16); }, 30);
@@ -908,7 +923,7 @@
     var e = findEntry(entryId);
     if (!e) return;
     e.note = el.entryNote.value.trim();
-    if (e.mode === 'sub') e.cat = entryCat || 'other';
+    if (e.source !== 'loan' && e.mode === 'sub') e.cat = entryCat || 'other';
     save();
     render();
     el.entryNote.blur();
@@ -916,11 +931,42 @@
     toast('Zapisano zmiany');
   }
 
+  // Cofnięcie wpisu pożyczki: zmiana pożyczki (d) wraca, a gotówka/konto o tyle samo w drugą stronę
+  function findLoanByName(name) {
+    return state.loans.filter(function (l) { return l.name.toLowerCase() === String(name).toLowerCase(); })[0] || null;
+  }
+  function loanRevert(e) {
+    var d = e.after - e.before;
+    var l = findLoanByName(e.name);
+    var cur = l ? l.amount : 0;
+    var f = e.fund === 'cash' || e.fund === 'bank' ? e.fund : null;
+    return { d: d, loan: l, cur: cur, next: cur - d, fund: f };
+  }
+
   function deleteEntry() {
     var e = findEntry(entryId);
     if (!e) return;
-    confirmAction('Usunąć ten wpis? ' + el.entryDeleteHint.textContent.replace('Usunięcie cofnie ten wpis: ', ''), 'Usuń wpis', function () {
+    confirmAction('Usunąć ten wpis? ' + el.entryDeleteHint.textContent.replace(/^Usunięcie cofnie ten wpis[:.] /, ''), 'Usuń wpis', function () {
       var now = Date.now();
+      if (e.source === 'loan') {
+        var r = loanRevert(e);
+        if (r.next < 0) return;
+        var l = r.loan;
+        if (!l && r.next > 0) {
+          l = { id: uid(), name: e.name, amount: 0, since: e.at, note: '', fund: e.fund || 'none' };
+          state.loans.push(l);
+        }
+        if (l) { l.amount = r.next; l.at = now; }
+        if (l && r.next === 0) state.loans = state.loans.filter(function (x) { return x.id !== l.id; });
+        if (r.fund) { state[r.fund] += r.d; state[r.fund + 'At'] = now; }
+        state.loansAt = now;
+        state.history = state.history.filter(function (x) { return x.id !== e.id; });
+        save();
+        render();
+        closePanel(el.entrySheet);
+        toast('Wpis usunięty');
+        return;
+      }
       if (e.mode === 'move') {
         state[e.source] += e.amount;
         state[e.to] -= e.amount;

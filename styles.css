@@ -530,3 +530,4 @@ button.hist-row:active { background: var(--fill-2); }
 }
 .action-group .action-btn + .action-btn { border-top: 0.5px solid var(--sep); }
 .action-btn { font-size: 19px; padding: 0 12px; }
+.danger-btn:disabled { color: var(--label-3); }
