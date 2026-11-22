@@ -569,3 +569,30 @@ button.hist-row:active { background: var(--fill-2); }
 .cat-row .row-icon svg { width: 17px; height: 17px; }
 .row-check { color: var(--blue); font-size: 20px; }
 .cat-results .group > li + li::before { left: 58px; }
+
+/* ---------- Ekran osoby (pożyczka) ---------- */
+#personSheet { z-index: 51; }
+#sheet, #entrySheet { z-index: 52; }
+.back-btn { display: inline-flex; align-items: center; gap: 0; margin-left: -8px; justify-self: start; }
+.back-btn .ic { font-size: 24px; }
+.person-scroll {
+  flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  margin: 0 -16px; padding: 0 16px calc(var(--safe-bottom) + 28px);
+}
+.person-hero { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 0 18px; text-align: center; }
+.avatar--lg { width: 64px; height: 64px; font-size: 24px; margin-bottom: 6px; }
+.person-label { font-size: 13px; color: var(--label-2); text-transform: uppercase; letter-spacing: .02em; }
+.person-amount { font-size: 38px; font-weight: 700; letter-spacing: -0.02em; }
+.person-meta { font-size: 14px; color: var(--label-2); }
+.person-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.action-tile {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 14px 8px; border-radius: var(--radius); background: var(--card);
+  font-size: 15px; font-weight: 600; color: var(--label);
+}
+@media (prefers-color-scheme: dark) { .action-tile { background: var(--card-2); } }
+.action-tile:active { opacity: .6; }
+.action-tile-icon { width: 40px; height: 40px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: #fff; font-size: 21px; }
+.person-more { margin-top: 20px; }
+#personHistory .row-title { font-size: 16px; }
+.fill-all { display: block; margin: 8px auto 0; font-size: 15px; }

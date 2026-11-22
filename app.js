@@ -243,7 +243,10 @@
     catBlock: $('catBlock'), catPickBtn: $('catPickBtn'), moveHint: $('moveHint'),
     catSheet: $('catSheet'), catSearch: $('catSearch'), catResults: $('catResults'), catCancel: $('catCancel'),
     fundBlock: $('fundBlock'), fundLabel: $('fundLabel'), fundControl: $('fundControl'), fundHint: $('fundHint'),
-    noteInput: $('noteInput'), sheetError: $('sheetError'), deleteLoanBtn: $('deleteLoanBtn'),
+    noteInput: $('noteInput'), sheetError: $('sheetError'), fillAllBtn: $('fillAllBtn'),
+    personSheet: $('personSheet'), personBack: $('personBack'), personTitle: $('personTitle'), personAvatar: $('personAvatar'),
+    personAmount: $('personAmount'), personMeta: $('personMeta'), personRepay: $('personRepay'), personLend: $('personLend'),
+    personHistory: $('personHistory'), personCorrect: $('personCorrect'), personDelete: $('personDelete'),
     loansSheet: $('loansSheet'), loansClose: $('loansClose'), loansAdd: $('loansAdd'), loansAddBig: $('loansAddBig'),
     loansTotal: $('loansTotal'), loanList: $('loanList'), loansEmpty: $('loansEmpty'),
     entrySheet: $('entrySheet'), entryCancel: $('entryCancel'), entrySave: $('entrySave'),
@@ -304,6 +307,7 @@
 
     renderHistory();
     renderLoans();
+    renderPerson();
   }
 
   function renderLoans() {
@@ -330,7 +334,7 @@
     if (e.source === 'loan') {
       var f = e.fund || 'none';
       if (e.mode === 'add') { d.ic = 'handCoins'; d.cls = 'row-icon--orange'; d.sub = 'Pożyczka' + FUND_FROM[f]; }
-      else if (e.mode === 'sub') { d.ic = 'undo'; d.cls = 'row-icon--green'; d.sub = (e.after === 0 ? 'Zwrot całości' : 'Zwrot') + FUND_TO[f]; }
+      else if (e.mode === 'sub') { d.ic = 'undo'; d.cls = 'row-icon--green'; d.sub = (e.after === 0 ? 'Spłata całości' : 'Spłata') + FUND_TO[f]; }
       else if (e.mode === 'del') { d.ic = 'trash'; d.cls = 'row-icon--gray'; d.sub = f !== 'none' ? 'Cofnięto pożyczkę, zwrot' + FUND_TO[f] : 'Usunięto pożyczkę'; }
       else { d.ic = 'equal'; d.cls = 'row-icon--indigo'; d.sub = 'Korekta pożyczki'; }
       d.title = e.note ? e.name + ': ' + e.note : e.name;
@@ -621,21 +625,27 @@
   }
 
   // ---------- Arkusze (wspólne) ----------
-  var PANELS = [el.sheet, el.loansSheet, el.entrySheet, el.catSheet, el.actionSheet];
-  function anyOpen() { return PANELS.some(function (s) { return s.classList.contains('is-open'); }); }
+  var PANELS = [el.sheet, el.loansSheet, el.personSheet, el.entrySheet, el.catSheet, el.actionSheet];
+  // Stan „otwarty” trzymamy w data-open (ustawiany od razu), a klasę is-open dokładamy w klatce animacji
+  // tylko jeśli panel nadal ma być otwarty — szybkie „otwórz i zamknij” nie zostawi otwartego arkusza.
+  function isOpen(panel) { return panel.dataset.open === '1'; }
+  function anyOpen() { return PANELS.some(isOpen); }
   function openPanel(panel) {
+    panel.dataset.open = '1';
     document.body.classList.add('no-scroll');
     el.backdrop.hidden = false;
     panel.hidden = false;
     panel.style.transform = '';
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
+        if (!isOpen(panel)) return;
         el.backdrop.classList.add('is-open');
         panel.classList.add('is-open');
       });
     });
   }
   function closePanel(panel) {
+    panel.dataset.open = '0';
     panel.classList.remove('is-open');
     panel.style.transform = '';
     if (!anyOpen()) {
@@ -643,7 +653,7 @@
       document.body.classList.remove('no-scroll');
     }
     setTimeout(function () {
-      if (!panel.classList.contains('is-open')) panel.hidden = true;
+      if (!isOpen(panel)) panel.hidden = true;
       if (!anyOpen()) el.backdrop.hidden = true;
     }, 380);
   }
@@ -668,7 +678,7 @@
 
   var MODE_LABELS = {
     source: { set: 'Ustaw', add: 'Dodaj', sub: 'Odejmij', move: 'Przenieś' },
-    loan: { set: 'Ustaw', add: 'Pożyczam', sub: 'Zwrot', move: '' }
+    loan: { set: 'Popraw kwotę', add: 'Pożycz więcej', sub: 'Spłata', move: '' }
   };
 
   function currentValue() {
@@ -691,15 +701,15 @@
       el.sheetTitle.textContent = SOURCES[c.key].name;
       el.sheetCurrentLabel.textContent = 'Obecnie';
     } else if (c.type === 'loan') {
-      el.sheetTitle.textContent = findLoan(c.id).name;
-      el.sheetCurrentLabel.textContent = 'Jest Ci winien';
+      el.sheetTitle.textContent = labels[c.mode || 'sub'] + ': ' + findLoan(c.id).name;
+      el.sheetCurrentLabel.textContent = 'Do oddania';
     } else {
       el.sheetTitle.textContent = 'Nowa pożyczka';
     }
-    el.modeControl.hidden = c.type === 'newLoan';
+    // Dla pożyczek tryb wybiera się przyciskiem na ekranie osoby, więc bez przełącznika
+    el.modeControl.hidden = !isSource;
     el.nameGroup.hidden = c.type !== 'newLoan';
     el.sheetCurrent.parentNode.hidden = c.type === 'newLoan';
-    el.deleteLoanBtn.hidden = c.type !== 'loan';
     el.sheetCurrent.textContent = money(currentValue());
     el.nameInput.value = '';
     el.noteInput.value = '';
@@ -709,7 +719,7 @@
     selCat = null;
     if (isSource) renderCatButton('catPick', null);
 
-    var startMode = c.type === 'newLoan' ? 'add' : c.type === 'loan' ? 'sub' : (state[c.key + 'At'] ? 'sub' : 'set');
+    var startMode = c.type === 'newLoan' ? 'add' : c.type === 'loan' ? (c.mode || 'sub') : (state[c.key + 'At'] ? 'sub' : 'set');
     setMode(startMode, true);
 
     openPanel(el.sheet);
@@ -717,11 +727,41 @@
     (c.type === 'newLoan' ? el.nameInput : el.amountInput).focus({ preventScroll: true });
   }
 
-  function closeEdit(reopenLoans) {
+  function closeEdit() {
     el.amountInput.blur(); el.noteInput.blur(); el.nameInput.blur();
-    var back = ctx && ctx.type !== 'source' && reopenLoans !== false && state.loans.length > 0;
     closePanel(el.sheet);
-    if (back) openPanel(el.loansSheet);
+  }
+
+  // ---------- Ekran osoby (pożyczka) ----------
+  var personId = null;
+
+  function openPerson(id) {
+    personId = id;
+    renderPerson();
+    el.personSheet.querySelector('.person-scroll').scrollTop = 0;
+    openPanel(el.personSheet);
+  }
+  function closePerson() { personId = null; closePanel(el.personSheet); }
+
+  function renderPerson() {
+    if (!personId) return;
+    var l = findLoan(personId);
+    if (!l) { if (isOpen(el.personSheet)) closePerson(); return; }
+    var f = loanFund(l);
+    el.personTitle.textContent = l.name;
+    el.personAvatar.textContent = initials(l.name);
+    el.personAmount.textContent = money(l.amount);
+    el.personMeta.textContent = 'Pożyczone od ' + dayLongFmt.format(new Date(l.since)) + (f === 'cash' ? ' · z gotówki' : f === 'bank' ? ' · z konta' : '');
+    var key = l.name.toLowerCase();
+    var entries = state.history.filter(function (e) { return e.source === 'loan' && String(e.name).toLowerCase() === key; });
+    el.personHistory.innerHTML = entries.map(function (e) {
+      var d = describe(e);
+      return '<li><button class="row hist-row" data-entry="' + esc(e.id) + '">' + iconBadge(d) +
+        '<span class="row-body"><span class="row-title">' + esc(d.sub) + '</span><span class="row-sub">' + esc((e.note ? e.note + ' · ' : '') + when(e.at)) + '</span></span>' +
+        '<span class="hist-right"><span class="hist-delta amount loan">' + signed(d.delta) + '</span><span class="hist-after amount">' + money(e.after) + '</span></span>' +
+        '</button></li>';
+    }).join('');
+    el.personHistory.hidden = entries.length === 0;
   }
 
   function setMode(m, resetValue) {
@@ -737,7 +777,9 @@
     el.catBlock.hidden = !(ctx.type === 'source' && m === 'sub');
     el.moveHint.hidden = !(ctx.type === 'source' && m === 'move');
     el.fundBlock.hidden = !(ctx.type !== 'source' && m !== 'set');
-    el.fundLabel.textContent = m === 'sub' ? 'Zwrot trafia do' : 'Pieniądze pochodzą z';
+    el.fundLabel.textContent = m === 'sub' ? 'Spłata trafia do' : 'Pieniądze pochodzą z';
+    el.fillAllBtn.hidden = !(ctx.type === 'loan' && m === 'sub');
+    if (!el.fillAllBtn.hidden) el.fillAllBtn.textContent = 'Spłata całości (' + money(currentValue()) + ')';
     el.noteInput.placeholder = m === 'sub' && ctx.type === 'source' ? 'Na co? (opcjonalnie)' : 'Notatka (opcjonalnie)';
     el.sheetError.hidden = true;
     updatePreview();
@@ -834,7 +876,7 @@
       var l = findLoan(ctx.id);
       if (n === null) { showError('Wpisz poprawną kwotę.'); return; }
       if (mode !== 'set' && v === 0) { showError('Kwota musi być większa od zera.'); return; }
-      if (n < 0) { showError('Zwrot nie może być większy niż pożyczka (' + money(l.amount) + ').'); return; }
+      if (n < 0) { showError('Spłata nie może być większa niż pożyczka (' + money(l.amount) + ').'); return; }
       var b = l.amount;
       if (mode === 'add') applyFund(fund, -v, now);
       if (mode === 'sub') applyFund(fund, v, now);
@@ -847,7 +889,7 @@
         state.loans = state.loans.filter(function (x) { return x.id !== l.id; });
         msg = l.name + ': rozliczone';
       } else {
-        msg = mode === 'sub' ? 'Zwrot zapisany' : 'Zapisano';
+        msg = mode === 'sub' ? 'Spłata zapisana' : 'Zapisano';
       }
     } else {
       if (n === null) { showError('Wpisz poprawną kwotę.'); return; }
@@ -890,8 +932,8 @@
     return 'none';
   }
 
-  function deleteLoan() {
-    var l = findLoan(ctx.id);
+  function deleteLoan(id) {
+    var l = findLoan(id);
     if (!l) return;
     var f = loanFund(l);
     var remove = function (back) {
@@ -902,7 +944,7 @@
       pushHistory({ source: 'loan', name: l.name, mode: 'del', fund: back || 'none', before: l.amount, after: 0, at: now, note: '' });
       save();
       render();
-      closeEdit();
+      if (isOpen(el.personSheet)) closePerson();
       toast(back ? 'Pożyczka cofnięta' : 'Pożyczka usunięta');
     };
     if (f === 'cash' || f === 'bank') {
@@ -1026,7 +1068,7 @@
   }
 
   // Przeciąganie arkuszy w dół (zamykanie gestem)
-  [el.sheet, el.loansSheet, el.entrySheet, el.catSheet].forEach(function (panel) {
+  [el.sheet, el.loansSheet, el.personSheet, el.entrySheet, el.catSheet].forEach(function (panel) {
     var startY = 0, dy = 0, dragging = false;
     [panel.querySelector('.sheet-grabber'), panel.querySelector('.sheet-header')].forEach(function (h) {
       h.addEventListener('touchstart', function (e) {
@@ -1102,14 +1144,22 @@
     else openEdit({ type: 'newLoan' });
   });
   el.loansClose.addEventListener('click', function () { closePanel(el.loansSheet); });
-  function newLoanFromList() { closePanel(el.loansSheet); openEdit({ type: 'newLoan' }); }
+  function newLoanFromList() { openEdit({ type: 'newLoan' }); }
   el.loansAdd.addEventListener('click', newLoanFromList);
   el.loansAddBig.addEventListener('click', newLoanFromList);
   el.loanList.addEventListener('click', function (e) {
     var b = e.target.closest('[data-loan]');
-    if (!b) return;
-    closePanel(el.loansSheet);
-    openEdit({ type: 'loan', id: b.getAttribute('data-loan') });
+    if (b) openPerson(b.getAttribute('data-loan'));
+  });
+  // Ekran osoby
+  el.personBack.addEventListener('click', closePerson);
+  el.personRepay.addEventListener('click', function () { openEdit({ type: 'loan', id: personId, mode: 'sub' }); });
+  el.personLend.addEventListener('click', function () { openEdit({ type: 'loan', id: personId, mode: 'add' }); });
+  el.personCorrect.addEventListener('click', function () { openEdit({ type: 'loan', id: personId, mode: 'set' }); });
+  el.personDelete.addEventListener('click', function () { deleteLoan(personId); });
+  el.personHistory.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-entry]');
+    if (b) openEntry(b.getAttribute('data-entry'));
   });
   el.history.addEventListener('click', function (e) {
     var b = e.target.closest('[data-entry]');
@@ -1134,7 +1184,7 @@
   el.noteInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
   el.sheetSave.addEventListener('click', commit);
   el.sheetCancel.addEventListener('click', function () { closeEdit(); });
-  el.deleteLoanBtn.addEventListener('click', deleteLoan);
+  el.fillAllBtn.addEventListener('click', function () { el.amountInput.value = toInput(currentValue()); updatePreview(); });
 
   el.entryCancel.addEventListener('click', function () { el.entryNote.blur(); closePanel(el.entrySheet); });
   el.entrySave.addEventListener('click', saveEntry);
@@ -1167,19 +1217,21 @@
   });
 
   el.backdrop.addEventListener('click', function () {
-    if (el.actionSheet.classList.contains('is-open')) closeActions();
-    else if (el.catSheet.classList.contains('is-open')) closePanel(el.catSheet);
-    else if (el.sheet.classList.contains('is-open')) closeEdit(false);
-    else if (el.entrySheet.classList.contains('is-open')) closePanel(el.entrySheet);
-    else if (el.loansSheet.classList.contains('is-open')) closePanel(el.loansSheet);
+    if (isOpen(el.actionSheet)) closeActions();
+    else if (isOpen(el.catSheet)) closePanel(el.catSheet);
+    else if (isOpen(el.sheet)) closeEdit(false);
+    else if (isOpen(el.entrySheet)) closePanel(el.entrySheet);
+    else if (isOpen(el.personSheet)) closePerson();
+    else if (isOpen(el.loansSheet)) closePanel(el.loansSheet);
   });
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Escape') return;
-    if (el.actionSheet.classList.contains('is-open')) closeActions();
-    else if (el.catSheet.classList.contains('is-open')) closePanel(el.catSheet);
-    else if (el.sheet.classList.contains('is-open')) closeEdit();
-    else if (el.entrySheet.classList.contains('is-open')) closePanel(el.entrySheet);
-    else if (el.loansSheet.classList.contains('is-open')) closePanel(el.loansSheet);
+    if (isOpen(el.actionSheet)) closeActions();
+    else if (isOpen(el.catSheet)) closePanel(el.catSheet);
+    else if (isOpen(el.sheet)) closeEdit();
+    else if (isOpen(el.entrySheet)) closePanel(el.entrySheet);
+    else if (isOpen(el.personSheet)) closePerson();
+    else if (isOpen(el.loansSheet)) closePanel(el.loansSheet);
   });
 
   el.clearHistoryBtn.addEventListener('click', function () {

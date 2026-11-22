@@ -208,6 +208,8 @@
       <span class="amount-currency">zł</span>
     </label>
 
+    <button type="button" class="text-btn fill-all" id="fillAllBtn" hidden></button>
+
     <div class="sheet-preview" id="sheetPreview">
       Nowy stan: <b id="previewValue">0,00 zł</b>
     </div>
@@ -245,7 +247,40 @@
       </li>
     </ul>
     <p class="sheet-error" id="sheetError" hidden></p>
-    <button class="danger-btn" id="deleteLoanBtn" hidden>Usuń pożyczkę</button>
+  </section>
+
+  <!-- Ekran osoby (pożyczka) -->
+  <section class="sheet sheet--tall" id="personSheet" role="dialog" aria-modal="true" aria-labelledby="personTitle" hidden>
+    <div class="sheet-grabber"><span></span></div>
+    <div class="sheet-header">
+      <button class="text-btn back-btn" id="personBack"><span class="ic" data-icon="chevronLeft"></span>Pożyczone</button>
+      <h3 class="sheet-title" id="personTitle"></h3>
+      <span></span>
+    </div>
+    <div class="person-scroll">
+      <div class="person-hero">
+        <span class="avatar avatar--lg" id="personAvatar"></span>
+        <span class="person-label">Do oddania</span>
+        <b class="person-amount amount" id="personAmount"></b>
+        <span class="person-meta" id="personMeta"></span>
+      </div>
+      <div class="person-actions">
+        <button class="action-tile" id="personRepay"><span class="action-tile-icon row-icon--green"><span class="ic" data-icon="undo"></span></span>Spłata</button>
+        <button class="action-tile" id="personLend"><span class="action-tile-icon row-icon--orange"><span class="ic" data-icon="plus"></span></span>Pożycz więcej</button>
+      </div>
+      <h2 class="section-header">Historia</h2>
+      <ul class="group group--sheet" id="personHistory"></ul>
+      <ul class="group group--sheet person-more">
+        <li>
+          <button class="row" id="personCorrect">
+            <span class="row-icon row-icon--indigo"><span class="ic" data-icon="equal"></span></span>
+            <span class="row-body"><span class="row-title">Popraw kwotę</span><span class="row-sub">Bez zmiany gotówki i konta</span></span>
+            <span class="row-chevron ic" data-icon="chevronRight"></span>
+          </button>
+        </li>
+      </ul>
+      <button class="danger-btn" id="personDelete">Usuń pożyczkę</button>
+    </div>
   </section>
 
   <!-- Arkusz listy pożyczek -->
@@ -266,7 +301,7 @@
       <p>Nikt nie jest Ci winien pieniędzy.</p>
     </div>
     <button class="primary-btn" id="loansAddBig"><span class="ic" data-icon="plus"></span>Nowa pożyczka</button>
-    <p class="section-footer">Stuknij osobę, aby zapisać zwrot albo dopisać kolejną pożyczkę.</p>
+    <p class="section-footer">Stuknij osobę, aby zobaczyć pożyczkę, zapisać spłatę albo pożyczyć więcej.</p>
   </section>
 
   <!-- Arkusz szczegółów wpisu historii -->
