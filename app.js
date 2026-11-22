@@ -213,7 +213,7 @@
     catStats: $('catStats'), catStatsEmpty: $('catStatsEmpty'),
     dailyChart: $('dailyChart'), dailyReadout: $('dailyReadout'),
     customCats: $('customCats'), customCatsHint: $('customCatsHint'), addCatBtn: $('addCatBtn'),
-    actionSheet: $('actionSheet'), actionTitle: $('actionTitle'), actionConfirm: $('actionConfirm'), actionCancel: $('actionCancel'),
+    actionSheet: $('actionSheet'), actionTitle: $('actionTitle'), actionGroup: $('actionGroup'), actionCancel: $('actionCancel'),
     toast: $('toast'), toastText: $('toastText')
   };
 
@@ -287,7 +287,7 @@
       var f = e.fund || 'none';
       if (e.mode === 'add') { d.ic = 'handCoins'; d.cls = 'row-icon--orange'; d.sub = 'Pożyczka' + FUND_FROM[f]; }
       else if (e.mode === 'sub') { d.ic = 'undo'; d.cls = 'row-icon--green'; d.sub = (e.after === 0 ? 'Zwrot całości' : 'Zwrot') + FUND_TO[f]; }
-      else if (e.mode === 'del') { d.ic = 'trash'; d.cls = 'row-icon--gray'; d.sub = 'Usunięto pożyczkę'; }
+      else if (e.mode === 'del') { d.ic = 'trash'; d.cls = 'row-icon--gray'; d.sub = f !== 'none' ? 'Cofnięto pożyczkę, zwrot' + FUND_TO[f] : 'Usunięto pożyczkę'; }
       else { d.ic = 'equal'; d.cls = 'row-icon--indigo'; d.sub = 'Korekta pożyczki'; }
       d.title = e.note ? e.name + ': ' + e.note : e.name;
       d.deltaCls = 'loan';
@@ -775,7 +775,7 @@
       if (!name) { showError('Wpisz, komu pożyczasz.'); el.nameInput.focus(); return; }
       if (isNaN(v) || v <= 0) { showError('Wpisz kwotę większą od zera.'); return; }
       var loan = state.loans.filter(function (l) { return l.name.toLowerCase() === name.toLowerCase(); })[0];
-      if (!loan) { loan = { id: uid(), name: name, amount: 0, since: now, note: '' }; state.loans.push(loan); }
+      if (!loan) { loan = { id: uid(), name: name, amount: 0, since: now, note: '', fund: fund }; state.loans.push(loan); }
       var before = loan.amount;
       loan.amount += v;
       loan.at = now;
@@ -835,19 +835,40 @@
     el.sheetError.hidden = false;
   }
 
+  // Skąd wyszły pieniądze na pożyczkę (gotówka / konto / bez zmian)
+  function loanFund(l) {
+    if (l.fund) return l.fund;
+    for (var i = 0; i < state.history.length; i++) {
+      var e = state.history[i];
+      if (e.source === 'loan' && e.mode === 'add' && e.name.toLowerCase() === l.name.toLowerCase()) return e.fund || 'none';
+    }
+    return 'none';
+  }
+
   function deleteLoan() {
     var l = findLoan(ctx.id);
     if (!l) return;
-    confirmAction('Usunąć pożyczkę: ' + l.name + ' (' + money(l.amount) + ')? Gotówka i konto pozostaną bez zmian, łączna suma zmniejszy się o tę kwotę.', 'Usuń pożyczkę', function () {
+    var f = loanFund(l);
+    var remove = function (back) {
       var now = Date.now();
+      if (back) applyFund(back, l.amount, now);
       state.loans = state.loans.filter(function (x) { return x.id !== l.id; });
       state.loansAt = now;
-      pushHistory({ source: 'loan', name: l.name, mode: 'del', fund: 'none', before: l.amount, after: 0, at: now, note: '' });
+      pushHistory({ source: 'loan', name: l.name, mode: 'del', fund: back || 'none', before: l.amount, after: 0, at: now, note: '' });
       save();
       render();
       closeEdit();
-      toast('Pożyczka usunięta');
-    });
+      toast(back ? 'Pożyczka cofnięta' : 'Pożyczka usunięta');
+    };
+    if (f === 'cash' || f === 'bank') {
+      actionChoices('Usunąć pożyczkę: ' + l.name + ' (' + money(l.amount) + ')? Pieniądze wyszły ' + FUND_FROM[f].trim() +
+        '. Możesz je tam oddać, jakby pożyczki nie było, albo spisać na straty (łączna suma zmniejszy się).', [
+        { text: 'Oddaj ' + money(l.amount) + FUND_TO[f], cb: function () { remove(f); } },
+        { text: 'Spisz na straty', danger: true, cb: function () { remove(null); } }
+      ]);
+    } else {
+      confirmAction('Usunąć pożyczkę: ' + l.name + ' (' + money(l.amount) + ')? Była zapisana bez zmiany gotówki i konta, więc łączna suma zmniejszy się o tę kwotę.', 'Usuń pożyczkę', function () { remove(null); });
+    }
   }
 
   // ---------- Arkusz szczegółów wpisu ----------
@@ -942,14 +963,21 @@
   });
 
   // ---------- Action sheet (potwierdzenia) ----------
-  var actionCb = null;
-  function confirmAction(title, btnText, cb) {
+  // buttons: [{ text, danger, cb }]
+  function actionChoices(title, buttons) {
     el.actionTitle.textContent = title;
-    el.actionConfirm.textContent = btnText;
-    actionCb = cb;
+    el.actionGroup.querySelectorAll('.action-btn').forEach(function (b) { b.remove(); });
+    buttons.forEach(function (btn) {
+      var b = document.createElement('button');
+      b.className = 'action-btn' + (btn.danger ? ' action-btn--danger' : '');
+      b.textContent = btn.text;
+      b.addEventListener('click', function () { closeActions(); btn.cb(); });
+      el.actionGroup.appendChild(b);
+    });
     openPanel(el.actionSheet);
   }
-  function closeActions() { actionCb = null; closePanel(el.actionSheet); }
+  function confirmAction(title, btnText, cb) { actionChoices(title, [{ text: btnText, danger: true, cb: cb }]); }
+  function closeActions() { closePanel(el.actionSheet); }
 
   // ---------- Toast ----------
   var toastTimer;
@@ -1045,11 +1073,6 @@
     });
   });
   el.actionCancel.addEventListener('click', closeActions);
-  el.actionConfirm.addEventListener('click', function () {
-    var cb = actionCb;
-    closeActions();
-    if (cb) cb();
-  });
 
   // Statystyki
   el.tabbar.addEventListener('click', function (e) {

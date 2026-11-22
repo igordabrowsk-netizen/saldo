@@ -528,3 +528,5 @@ button.hist-row:active { background: var(--fill-2); }
 @media (prefers-color-scheme: dark) {
   :root { --chart-pos: #0a84ff; --chart-neg: #ff453a; --chart-axis: #48484a; --chart-grid: #2c2c2e; --chart-muted: #8e8e93; }
 }
+.action-group .action-btn + .action-btn { border-top: 0.5px solid var(--sep); }
+.action-btn { font-size: 19px; padding: 0 12px; }
