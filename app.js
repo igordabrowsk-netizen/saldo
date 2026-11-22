@@ -233,7 +233,7 @@
     pctCash: $('pctCash'), pctBank: $('pctBank'), pctLoan: $('pctLoan'), legendLoan: $('legendLoan'),
     cashAmount: $('cashAmount'), bankAmount: $('bankAmount'), loansAmount: $('loansAmount'),
     cashUpdated: $('cashUpdated'), bankUpdated: $('bankUpdated'), loansSub: $('loansSub'), loansRow: $('loansRow'),
-    history: $('history'), historyEmpty: $('historyEmpty'), clearHistoryBtn: $('clearHistoryBtn'),
+    history: $('history'), historyEmpty: $('historyEmpty'),
     historySheet: $('historySheet'), histClose: $('histClose'), histPeriodBtn: $('histPeriodBtn'), histPeriodName: $('histPeriodName'),
     histCustom: $('histCustom'), histFrom: $('histFrom'), histTo: $('histTo'), histType: $('histType'),
     histSummary: $('histSummary'), histList: $('histList'), histEmpty: $('histEmpty'),
@@ -1386,11 +1386,6 @@
     if (e.target.closest('#histMoreBtn')) { histLimit += 200; renderHistorySheet(); return; }
     var b = e.target.closest('[data-entry]');
     if (b) openEntry(b.getAttribute('data-entry'));
-  });
-  el.clearHistoryBtn.addEventListener('click', function () {
-    confirmAction('Wyczyścić całą historię zmian? Kwoty zostaną bez zmian, ale statystyki wydatków i odkładania też zostaną wyczyszczone.', 'Wyczyść historię', function () {
-      state.history = []; save(); render(); closePanel(el.historySheet); toast('Historia wyczyszczona');
-    });
   });
   el.actionCancel.addEventListener('click', closeActions);
 

@@ -1,5 +1,5 @@
 // Saldo — Service Worker (offline, cache app-shell)
-const CACHE = 'saldo-v8';
+const CACHE = 'saldo-v9';
 const SHELL = [
   './',
   './index.html',

@@ -625,6 +625,5 @@ button.hist-row:active { background: var(--fill-2); }
 .day-header span:first-child { font-weight: 600; color: var(--label); }
 .primary-btn--plain { background: var(--card); color: var(--blue); font-weight: 500; }
 @media (prefers-color-scheme: dark) { .primary-btn--plain { background: var(--card-2); } }
-#historySheet .danger-btn { margin-top: 24px; }
 .action-btn--bold { font-weight: 600; }
 .action-sheet { max-height: calc(100dvh - var(--safe-top) - 8px); overflow-y: auto; }
