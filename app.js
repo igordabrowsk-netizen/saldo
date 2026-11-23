@@ -79,10 +79,15 @@
     }
   }
   var dirty = false; // zmiany, których nie udało się zapisać
-  function save() {
+  var syncActive = false; // włączona synchronizacja z chmurą (sync.js)
+  // opts.silent — zapis bez powiadamiania bazy w chmurze (np. gdy dane właśnie przyszły z chmury)
+  function save(opts) {
     try {
       localStorage.setItem(KEY, JSON.stringify(state));
       dirty = false;
+      if (!(opts && opts.silent)) {
+        try { window.dispatchEvent(new CustomEvent('saldo:changed')); } catch (e) { /* stara przeglądarka */ }
+      }
       return true;
     } catch (e) {
       dirty = true;
@@ -486,7 +491,7 @@
       var c = catById(e.cat || 'other');
       d.ic = c.icon; d.cls = 'cat-icon'; d.bg = c.color;
       d.title = e.note || c.name;
-      d.sub = (e.note ? c.name + ' · ' : '') + src;
+      d.sub = (e.note ? c.name + ' · ' : '') + (e.via === 'applepay' ? 'Apple Pay' : src);
       d.deltaCls = 'neg';
     } else if (e.mode === 'add') {
       d.ic = 'plus'; d.cls = 'row-icon--green';
@@ -923,7 +928,7 @@
   // ---------- Arkusze: stos otwartych paneli ----------
   // Każdy otwarty panel dostaje kolejną warstwę; tło (backdrop) leży tuż pod najwyższym,
   // a niższe panele są nieaktywne (inert), więc da się używać tylko tego na wierzchu.
-  var PANELS = [el.sheet, el.loansSheet, el.personSheet, el.historySheet, el.entrySheet, el.catSheet, el.actionSheet];
+  var PANELS = [el.sheet, el.loansSheet, el.personSheet, el.historySheet, el.entrySheet, el.catSheet, el.actionSheet, $('guideSheet')];
   var stack = [];
   var zTop = 50;      // warstwy rosną z każdym otwarciem, więc zamykany panel nigdy nie zasłoni nowego
   var openedAt = 0;   // chroni przed zamknięciem panelu tym samym (podwójnym) stuknięciem, które go otworzyło
@@ -986,6 +991,7 @@
     if (panel === el.sheet) closeEdit();
     else if (panel === el.personSheet) closePerson();
     else if (panel === el.entrySheet) closeEntry();
+    else if (panel === el.actionSheet) closeActions();
     else closePanel(panel);
   }
   function closeTop() { var p = topPanel(); if (p) closeAny(p); }
@@ -1517,8 +1523,11 @@
   });
 
   // ---------- Action sheet (potwierdzenia) ----------
-  // buttons: [{ text, danger, bold, cb }] — każde potwierdzenie wykona się najwyżej raz
-  function actionChoices(title, buttons) {
+  // buttons: [{ text, danger, bold, cb }] — każde potwierdzenie wykona się najwyżej raz.
+  // onCancel — wywołane, gdy arkusz zamknięto bez wyboru (Anuluj, tło, Escape, nowy arkusz akcji).
+  var actionCancelCb = null;
+  function actionChoices(title, buttons, onCancel) {
+    if (actionCancelCb) { var prev = actionCancelCb; actionCancelCb = null; prev(); }
     el.actionTitle.textContent = title;
     el.actionGroup.querySelectorAll('.action-btn').forEach(function (b) { b.remove(); });
     var fired = false;
@@ -1529,15 +1538,22 @@
       b.addEventListener('click', function () {
         if (fired || !isOpen(el.actionSheet)) return;
         fired = true;
-        closeActions();
+        actionCancelCb = null;
+        closePanel(el.actionSheet);
         btn.cb();
       });
       el.actionGroup.appendChild(b);
     });
+    actionCancelCb = onCancel || null;
     openPanel(el.actionSheet);
   }
   function confirmAction(title, btnText, cb) { actionChoices(title, [{ text: btnText, danger: true, cb: cb }]); }
-  function closeActions() { closePanel(el.actionSheet); }
+  function closeActions() {
+    var c = actionCancelCb;
+    actionCancelCb = null;
+    closePanel(el.actionSheet);
+    if (c) c();
+  }
 
   // ---------- Toast i animacja potwierdzenia ----------
   var toastTimer, toastHideTimer;
@@ -1614,20 +1630,113 @@
     reader.readAsText(file);
   }
 
-  // ---------- Karty (Środki / Statystyki) ----------
+  // ---------- Karty (Środki / Statystyki / Konto) ----------
+  var TABS = { home: { view: el.viewHome, title: 'Środki' }, stats: { view: el.viewStats, title: 'Statystyki' }, account: { view: $('viewAccount'), title: 'Konto' } };
   function switchTab(name) {
+    if (!TABS[name]) name = 'home';
     var stats = name === 'stats';
-    var view = stats ? el.viewStats : el.viewHome;
-    el.viewHome.hidden = stats;
-    el.viewStats.hidden = !stats;
+    Object.keys(TABS).forEach(function (k) { TABS[k].view.hidden = k !== name; });
+    var view = TABS[name].view;
     view.classList.remove('is-entering'); void view.offsetWidth; view.classList.add('is-entering');
     el.tabbar.querySelectorAll('.tab').forEach(function (t) { t.classList.toggle('is-active', t.getAttribute('data-tab') === name); });
-    el.navbarTitle.textContent = stats ? 'Statystyki' : 'Środki';
-    try { history.replaceState(null, '', stats ? '#stats' : location.pathname + location.search); } catch (e) { /* plik lokalny */ }
+    el.navbarTitle.textContent = TABS[name].title;
+    try { history.replaceState(null, '', name === 'home' ? location.pathname + location.search : '#' + name); } catch (e) { /* plik lokalny */ }
     window.scrollTo(0, 0);
     onScroll();
     if (!stats && addingCat) { addingCat = false; catDraft = ''; renderCustomCats(); }
     if (stats) { selDay = null; renderStats(); }
+    try { window.dispatchEvent(new CustomEvent('saldo:tab', { detail: name })); } catch (e) { /* stara przeglądarka */ }
+  }
+
+  // ---------- Interfejs dla modułu bazy danych (sync.js) ----------
+  function isEmptyState(s) {
+    return !s || (!s.cash && !s.bank && !(s.loans && s.loans.length) && !(s.history && s.history.length) && !(s.customCats && s.customCats.length));
+  }
+  window.Saldo = {
+    getState: function () { return state; },
+    // Podmienia całe dane (np. z chmury albo z kopii). silent — bez odsyłania zmian z powrotem do chmury.
+    replaceState: function (next, opts) {
+      state = migrate(JSON.parse(JSON.stringify(next)));
+      // Udziały pożyczek (gotówka/konto/bez zmian) zawsze liczone z historii — każde urządzenie dochodzi do tego samego wyniku
+      state.loans.forEach(function (l) { l.funds = null; fundsOf(l); });
+      save({ silent: !!(opts && opts.silent) });
+      render();
+    },
+    migrate: function (s) { return migrate(JSON.parse(JSON.stringify(s))); },
+    isEmpty: isEmptyState,
+    money: money, plural: plural, when: when, esc: esc, icon: icon, ymd: ymd,
+    fullDate: function (ts) { return fullFmt.format(new Date(ts)); },
+    total: function (s) { s = s || state; return s.cash + s.bank + (s.loans || []).reduce(function (a, l) { return a + l.amount; }, 0); },
+    toast: function (m, k) { toast(m, k); },
+    showDone: function (m) { showDone(m); },
+    actionChoices: function (t, b, onCancel) { actionChoices(t, b, onCancel); },
+    setSyncActive: function (on) { syncActive = !!on; },
+    confirmAction: function (t, b, cb) { confirmAction(t, b, cb); },
+    guessCat: guessCat,
+    openSheet: function (p) { openPanel(p); },
+    closeSheet: function (p) { closePanel(p); },
+    catName: function (id) { return catById(id).name; },
+    // Wydatek dopisany automatycznie (np. płatność Apple Pay ze Skrótów). Zwraca false, gdy już istnieje.
+    addExternalExpense: function (x) {
+      if (!x || !x.id || findEntry(x.id) || !(x.amount > 0) || x.amount > MAX_GROSZE) return false;
+      var key = x.source === 'cash' ? 'cash' : 'bank';
+      var now = Date.now();
+      var before = state[key];
+      state[key] -= x.amount;
+      state[key + 'At'] = now;
+      var e = { id: x.id, source: key, mode: 'sub', cat: x.cat || 'other', before: before, after: state[key], at: x.at || now, note: String(x.note || '').slice(0, 60), via: x.via || '' };
+      state.history.push(e);
+      state.history.sort(function (a, b) { return b.at - a.at; });
+      if (state.history.length > HISTORY_LIMIT) state.history.length = HISTORY_LIMIT;
+      lastNewId = e.id;
+      setTimeout(function () { if (lastNewId === e.id) lastNewId = null; }, 1500);
+      save();
+      render();
+      return true;
+    }
+  };
+
+  // ---------- Rozpoznawanie grupy po nazwie sklepu ----------
+  // Najpierw uczy się z historii (grupa, którą ostatnio miał wydatek z tą samą notatką/sklepem),
+  // a gdy brak — korzysta z listy znanych sklepów.
+  var MERCHANT_RULES = [
+    ['fuel', ['orlen', 'bp ', 'bp-', 'shell', 'circle k', 'circlek', 'moya', 'amic', 'lotos', 'stacja paliw', 'huzar', 'avia']],
+    ['food', ['biedronka', 'lidl', 'kaufland', 'auchan', 'carrefour', 'zabka', 'dino', 'netto', 'aldi', 'stokrotka', 'lewiatan', 'spar', 'polomarket', 'intermarche', 'frisco', 'delikatesy', 'groszek', 'mila', 'chata polska', 'eurospar', 'piekarnia', 'warzywniak', 'market']],
+    ['restaurants', ['mcdonald', 'kfc', 'burger king', 'starbucks', 'costa coffee', 'pizza', 'restaur', 'bistro', 'sushi', 'kebab', 'cafe', 'kawiarnia', 'wolt', 'glovo', 'pyszne', 'uber eats', 'ubereats', 'subway', 'north fish', 'bar ', 'pasibus', 'max premium']],
+    ['transport', ['uber', 'bolt', 'freenow', 'free now', 'mpk', 'ztm', 'pkp', 'intercity', 'koleje', 'jakdojade', 'skycash', 'ryanair', 'wizz', 'lot polish', 'flixbus', 'parking', 'mobilet', 'autostrad', 'e-toll']],
+    ['subs', ['netflix', 'spotify', 'youtube', 'hbo', 'max.com', 'disney', 'canal+', 'canal plus', 'prime video', 'amazon prime', 'icloud', 'apple.com', 'apple music', 'google one', 'chatgpt', 'openai', 'tidal', 'player.pl', 'polsat box']],
+    ['health', ['apteka', 'doz', 'ziko', 'super-pharm', 'superpharm', 'medicover', 'luxmed', 'lux med', 'enel-med', 'lekarz', 'dentyst', 'stomatolog', 'przychodnia', 'optyk']],
+    ['beauty', ['rossmann', 'hebe', 'sephora', 'douglas', 'notino', 'fryzjer', 'barber', 'kosmety']],
+    ['clothes', ['zara', 'h&m', 'reserved', 'ccc', 'sinsay', 'house', 'cropp', 'mohito', 'pepco', 'nike', 'adidas', 'zalando', 'primark', 'bershka', 'pull&bear', 'stradivarius', 'tk maxx', 'answear', 'eobuwie', 'deichmann', 'half price']],
+    ['electronics', ['media expert', 'mediaexpert', 'rtv euro', 'euro agd', 'x-kom', 'morele', 'media markt', 'mediamarkt', 'neonet', 'komputronik', 'apple store', 'istore', 'cortland']],
+    ['home', ['ikea', 'castorama', 'leroy merlin', 'obi', 'jysk', 'action', 'bricomarche', 'agata meble', 'black red white', 'homla', 'jula', 'merkury']],
+    ['fun', ['cinema city', 'multikino', 'helios', 'steam', 'playstation', 'xbox', 'nintendo', 'empik', 'ebilet', 'eventim', 'kino', 'teatr', 'bowling']],
+    ['bills', ['pge', 'tauron', 'enea', 'energa', 'pgnig', 'orange', 'play', 'plus ', 't-mobile', 'tmobile', 'upc', 'vectra', 'netia', 'inea', 'czynsz', 'wodociag', 'gaz ']],
+    ['pets', ['zooplus', 'kakadu', 'maxi zoo', 'maxizoo', 'weteryn', 'zoo ']],
+    ['sport', ['decathlon', 'silownia', 'gym', 'benefit', 'zdrofit', 'mcfit', 'calypso', 'fitness', 'go sport', 'intersport', 'martes']],
+    ['travel', ['booking', 'airbnb', 'hotel', 'hostel', 'expedia', 'trivago', 'itaka', 'rainbow', 'tui']],
+    ['education', ['udemy', 'coursera', 'ksiegarnia', 'duolingo', 'szkola', 'kurs']],
+    ['kids', ['smyk', 'toys', 'zabawk']],
+    ['insurance', ['pzu', 'warta', 'allianz', 'ergo hestia', 'hestia', 'link4', 'generali', 'uniqa', 'compensa', 'ubezpiecz']],
+    ['gifts', ['kwiaciarnia', 'kwiaty', 'prezent', 'apart', 'w.kruk', 'yes bizuteria', 'pandora']]
+  ];
+  function normText(s) {
+    return ' ' + String(s || '').toLowerCase().replace(/ł/g, 'l').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim() + ' ';
+  }
+  function guessCat(merchant) {
+    var m = normText(merchant);
+    if (m.trim()) {
+      // Nauka: ostatni wydatek z tym samym sklepem (notatką)
+      for (var i = 0; i < state.history.length; i++) {
+        var e = state.history[i];
+        if (e.mode === 'sub' && e.source !== 'loan' && e.cat && normText(e.note) === m) return e.cat;
+      }
+      for (var r = 0; r < MERCHANT_RULES.length; r++) {
+        var keys = MERCHANT_RULES[r][1];
+        for (var k = 0; k < keys.length; k++) if (m.indexOf(keys[k]) !== -1 || m.indexOf(' ' + keys[k].trim() + ' ') !== -1) return MERCHANT_RULES[r][0];
+      }
+    }
+    return 'other';
   }
 
   // ---------- Zdarzenia ----------
@@ -1800,8 +1909,8 @@
   }, 60000);
   document.addEventListener('visibilitychange', function () {
     if (document.hidden || anyOpen()) return;
-    // Nie nadpisuj niezapisanych zmian danymi z pamięci
-    if (!dirty) state = load();
+    // Nie nadpisuj niezapisanych zmian danymi z pamięci; przy synchronizacji stan trzyma moduł bazy
+    if (!dirty && !syncActive) state = load();
     state.loans.forEach(function (l) { fundsOf(l); });
     render();
   });
@@ -1812,7 +1921,7 @@
   state.loans.forEach(function (l) { fundsOf(l); });
   paintIcons();
   renderHome();
-  switchTab(location.hash === '#stats' ? 'stats' : 'home');
+  switchTab((location.hash || '').replace('#', '') || 'home');
   if (loadWarning) toast(loadWarning, 'info');
 
   // ---------- Service Worker ----------

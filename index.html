@@ -163,7 +163,93 @@
     <ul class="group" id="customCats"></ul>
     <p class="section-footer" id="customCatsHint">Własne grupy dodasz tutaj albo przy zapisywaniu wydatku.</p>
 
-    <h2 class="section-header section-header--lg">Kopia zapasowa</h2>
+    <p class="section-footer stats-footnote">Statystyki liczą wpływy (Dodaj) i wydatki (Odejmij) z gotówki i konta. Korekty stanu, przeniesienia i pożyczki nie są wliczane.</p>
+  </main>
+
+  <!-- ================= KONTO ================= -->
+  <main class="page view" id="viewAccount" hidden>
+    <div class="large-title-row">
+      <div>
+        <p class="eyebrow">Baza danych i kopie</p>
+        <h1 class="large-title">Konto</h1>
+      </div>
+    </div>
+
+    <section class="card sync-card" id="syncCard">
+      <span class="sync-icon" id="syncIcon"></span>
+      <span class="sync-body">
+        <b class="sync-title" id="syncTitle">Tylko na tym urządzeniu</b>
+        <span class="sync-sub" id="syncSub"></span>
+      </span>
+    </section>
+
+    <!-- Logowanie -->
+    <div id="authBox">
+      <h2 class="section-header section-header--lg">Synchronizacja w chmurze</h2>
+      <ul class="group">
+        <li class="row row--input">
+          <span class="row-icon row-icon--blue"><span class="ic" data-icon="mail"></span></span>
+          <input id="authEmail" type="email" inputmode="email" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Adres e-mail" maxlength="120">
+        </li>
+        <li class="row row--input">
+          <span class="row-icon row-icon--gray"><span class="ic" data-icon="lock"></span></span>
+          <input id="authPass" type="password" autocomplete="current-password" placeholder="Hasło (min. 6 znaków)" maxlength="100">
+        </li>
+      </ul>
+      <p class="sheet-error" id="authError" hidden></p>
+      <button class="primary-btn" id="authLogin">Zaloguj się</button>
+      <button class="primary-btn primary-btn--plain" id="authRegister">Załóż konto</button>
+      <button class="text-btn fill-all" id="authReset">Nie pamiętam hasła</button>
+      <p class="section-footer" id="authNote">Po zalogowaniu te same dane są na telefonie i komputerze, zmiany synchronizują się na bieżąco (także po powrocie internetu), a w chmurze codziennie powstaje kopia zapasowa.</p>
+    </div>
+
+    <!-- Zalogowany -->
+    <div id="userBox" hidden>
+      <h2 class="section-header section-header--lg">Konto</h2>
+      <ul class="group">
+        <li>
+          <div class="row">
+            <span class="avatar avatar--blue" id="userAvatar"></span>
+            <span class="row-body"><span class="row-title" id="userEmail"></span><span class="row-sub" id="userSub"></span></span>
+          </div>
+        </li>
+        <li>
+          <button class="row" id="syncNow">
+            <span class="row-icon row-icon--blue"><span class="ic" data-icon="refresh"></span></span>
+            <span class="row-body"><span class="row-title">Utwórz kopię w chmurze teraz</span></span>
+            <span class="row-chevron ic" data-icon="chevronRight"></span>
+          </button>
+        </li>
+        <li>
+          <button class="row" id="authLogout">
+            <span class="row-icon row-icon--gray"><span class="ic" data-icon="logOut"></span></span>
+            <span class="row-body"><span class="row-title">Wyloguj</span><span class="row-sub">Dane zostaną na tym urządzeniu</span></span>
+          </button>
+        </li>
+      </ul>
+    </div>
+
+    <h2 class="section-header section-header--lg">Płatności Apple Pay</h2>
+    <ul class="group">
+      <li>
+        <button class="row" id="applePayGuide">
+          <span class="row-icon row-icon--dark"><span class="ic" data-icon="wallet"></span></span>
+          <span class="row-body"><span class="row-title">Automatyczne dopisywanie</span><span class="row-sub" id="applePaySub">Płatności z Portfela trafiają do Saldo same</span></span>
+          <span class="row-chevron ic" data-icon="chevronRight"></span>
+        </button>
+      </li>
+    </ul>
+    <p class="section-footer">Po płatności Apple Pay telefonem lub zegarkiem skrót iOS wysyła kwotę i sklep do Twojej bazy, a Saldo zapisuje wydatek z konta i samo dobiera grupę (uczy się z Twoich poprawek).</p>
+
+    <h2 class="section-header section-header--lg">Kopie automatyczne</h2>
+    <ul class="group" id="autoBackups"></ul>
+    <div class="empty" id="autoBackupsEmpty">
+      <span class="empty-icon ic" data-icon="archive"></span>
+      <p>Pierwsza kopia powstanie automatycznie, gdy zapiszesz dane.</p>
+    </div>
+    <p class="section-footer">Kopia tworzy się sama raz dziennie: w telefonie (14 dni) i w chmurze po zalogowaniu (30 dni). Stuknij kopię, aby przywrócić dane z tego dnia.</p>
+
+    <h2 class="section-header section-header--lg">Kopia w pliku</h2>
     <ul class="group">
       <li>
         <button class="row" id="backupExport">
@@ -181,14 +267,13 @@
       </li>
     </ul>
     <input type="file" id="backupFile" accept="application/json,.json" hidden>
-    <p class="section-footer">Dane są zapisane tylko na tym telefonie. Zrób kopię od czasu do czasu, żeby ich nie stracić.</p>
-    <p class="section-footer stats-footnote">Statystyki liczą wpływy (Dodaj) i wydatki (Odejmij) z gotówki i konta. Korekty stanu, przeniesienia i pożyczki nie są wliczane.</p>
   </main>
 
   <!-- Dolny pasek kart -->
   <nav class="tabbar" id="tabbar">
     <button class="tab is-active" data-tab="home"><span class="ic" data-icon="wallet"></span><span>Środki</span></button>
     <button class="tab" data-tab="stats"><span class="ic" data-icon="chartColumn"></span><span>Statystyki</span></button>
+    <button class="tab" data-tab="account"><span class="tab-icon-wrap"><span class="ic" data-icon="cloud"></span><span class="tab-dot" id="tabDot" hidden></span></span><span>Konto</span></button>
   </nav>
 
   <!-- Arkusz edycji kwoty -->
@@ -305,6 +390,17 @@
         <p>Brak wpisów w wybranym okresie.</p>
       </div>
     </div>
+  </section>
+
+  <!-- Instrukcja skrótu Apple Pay -->
+  <section class="sheet sheet--tall" id="guideSheet" role="dialog" aria-modal="true" aria-labelledby="guideTitle" hidden>
+    <div class="sheet-grabber"><span></span></div>
+    <div class="sheet-header">
+      <button class="text-btn" id="guideClose">Zamknij</button>
+      <h3 class="sheet-title" id="guideTitle">Apple Pay</h3>
+      <span></span>
+    </div>
+    <div class="sheet-scroll" id="guideBody"></div>
   </section>
 
   <!-- Ekran osoby (pożyczka) -->
@@ -427,7 +523,13 @@
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden><span class="toast-icon" id="toastIcon"></span><span id="toastText"></span></div>
 
-  <script src="icons.js"></script>
-  <script src="app.js"></script>
+  <!-- Baza danych w chmurze (Firebase). Bez internetu aplikacja działa lokalnie. -->
+  <script src="firebase-config.js" defer></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js" defer></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" defer></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" defer></script>
+  <script src="icons.js" defer></script>
+  <script src="app.js" defer></script>
+  <script src="sync.js" defer></script>
 </body>
 </html>
