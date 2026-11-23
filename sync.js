@@ -896,7 +896,7 @@
         '<p>Dodaj akcję <b>Pobierz zawartość URL</b> i wklej adres:</p>' + copyBox(signIn) +
         '<p>Rozwiń szczegóły: metoda <b>POST</b>, treść żądania <b>JSON</b> i dodaj pola:</p>' +
         '<ul><li><b>email</b> (Tekst):</li></ul>' + copyBox(user.email || '') +
-        '<ul><li><b>password</b> (Tekst): Twoje hasło do Saldo</li><li><b>returnSecureToken</b> (Wartość logiczna): <b>Prawda</b></li></ul></div>' +
+        '<ul><li><b>password</b> (Tekst): Twoje hasło do Saldo</li></ul></div>' +
       '<div class="guide-step"><h4><span class="guide-num">3</span>Odczyt klucza</h4>' +
         '<p>Dodaj akcję <b>Pobierz wartość słownika</b>: pobierz <b>wartość</b> dla klucza</p>' + copyBox('idToken') + '<p>z <b>Zawartość URL</b>.</p></div>' +
       '<div class="guide-step"><h4><span class="guide-num">4</span>Wysłanie płatności</h4>' +
