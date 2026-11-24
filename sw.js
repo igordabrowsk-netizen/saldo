@@ -1,5 +1,5 @@
 // Saldo — Service Worker (offline, cache app-shell + biblioteki Firebase)
-const CACHE = 'saldo-v16';
+const CACHE = 'saldo-v17';
 const SHELL = [
   './',
   './index.html',
