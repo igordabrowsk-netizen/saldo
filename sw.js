@@ -1,5 +1,5 @@
 // Saldo — Service Worker (offline, cache app-shell + biblioteki Firebase)
-const CACHE = 'saldo-v17';
+const CACHE = 'saldo-v18';
 const SHELL = [
   './',
   './index.html',
@@ -50,6 +50,15 @@ self.addEventListener('fetch', (event) => {
   const own = url.origin === location.origin;
   const lib = url.origin === 'https://www.gstatic.com' && url.pathname.startsWith('/firebasejs/');
   if (!own && !lib) return;
+  // Biblioteki Firebase mają wersję w adresie (nie zmieniają się) — najpierw pamięć urządzenia,
+  // żeby wolny internet nie wstrzymywał startu aplikacji
+  if (lib) {
+    event.respondWith(caches.match(req).then((hit) => hit || fetch(req).then((res) => {
+      if (res.ok || res.type === 'opaque') { const copy = res.clone(); event.waitUntil(caches.open(CACHE).then((c) => c.put(req, copy))); }
+      return res;
+    })));
+    return;
+  }
   event.respondWith(
     fetch(req)
       .then((res) => {

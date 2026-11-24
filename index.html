@@ -523,11 +523,8 @@
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden><span class="toast-icon" id="toastIcon"></span><span id="toastText"></span></div>
 
-  <!-- Baza danych w chmurze (Firebase). Bez internetu aplikacja działa lokalnie. -->
+  <!-- Baza danych w chmurze (Firebase) — biblioteki wczytuje sync.js po starcie. Bez internetu aplikacja działa lokalnie. -->
   <script src="firebase-config.js" defer></script>
-  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js" defer></script>
-  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" defer></script>
-  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" defer></script>
   <script src="icons.js" defer></script>
   <script src="app.js" defer></script>
   <script src="sync.js" defer></script>

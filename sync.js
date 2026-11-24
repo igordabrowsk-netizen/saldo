@@ -23,7 +23,16 @@
 
   var cfg = window.SALDO_FIREBASE_CONFIG;
   var configured = !!(cfg && cfg.apiKey && cfg.projectId);
-  var sdk = typeof window.firebase !== 'undefined' && window.firebase.firestore && window.firebase.auth;
+  // Biblioteki Firebase wczytujemy dopiero po starcie aplikacji — wolny internet nie wstrzymuje ekranu
+  var LIBS = ['app', 'auth', 'firestore'].map(function (m) { return 'https://www.gstatic.com/firebasejs/10.14.1/firebase-' + m + '-compat.js'; });
+  function loadScript(src) {
+    return new Promise(function (res, rej) {
+      var s = document.createElement('script');
+      s.src = src; s.async = false;
+      s.onload = res; s.onerror = function () { s.remove(); rej(new Error('load ' + src)); };
+      document.head.appendChild(s);
+    });
+  }
   var LOCAL_KEEP = 14, CLOUD_KEEP = 30, CHUNK = 250000;
   // Identyfikator tego urządzenia (do potwierdzeń przejęcia płatności Apple Pay)
   var deviceId = (function () {
@@ -175,21 +184,34 @@
   var lastEntries = {};     // id → JSON wpisu, który jest w chmurze
   var status = 'local', statusMsg = '', lastSyncAt = null, pending = 0, pushTimer = null, retryTimer = null;
 
-  if (!configured) {
-    statusMsg = '';
-  } else if (!sdk) {
-    statusMsg = 'Nie udało się wczytać modułu bazy danych (brak internetu?). Dane zapisują się w tym urządzeniu — otwórz aplikację ponownie z internetem, aby synchronizować.';
-  } else {
+  function startFirebase() {
     try {
       firebase.initializeApp(cfg);
       auth = firebase.auth();
       db = firebase.firestore();
       db.enablePersistence({ synchronizeTabs: true }).catch(function () { /* np. tryb prywatny — działa bez pamięci podręcznej */ });
+      statusMsg = '';
       auth.onAuthStateChanged(onUser);
     } catch (e) {
       auth = null;
       statusMsg = 'Nie udało się uruchomić bazy: ' + e.message;
     }
+    renderAccount();
+  }
+  var libsLoading = false;
+  function loadFirebase() {
+    if (!configured || auth || libsLoading) return;
+    if (window.firebase && window.firebase.auth && window.firebase.firestore) { startFirebase(); return; }
+    libsLoading = true;
+    statusMsg = 'Łączenie z bazą danych…';
+    Promise.all(LIBS.map(loadScript)).then(function () {
+      libsLoading = false;
+      startFirebase();
+    }, function () {
+      libsLoading = false;
+      statusMsg = 'Nie udało się wczytać modułu bazy danych (brak internetu?). Dane zapisują się w tym urządzeniu — synchronizacja ruszy po powrocie internetu.';
+      renderAccount();
+    });
   }
 
   function userDoc() { return db.collection('users').doc(user.uid); }
@@ -197,6 +219,46 @@
   function entriesCol() { return userDoc().collection('entries'); }
   function backupsCol() { return userDoc().collection('backups'); }
   function inboxCol() { return userDoc().collection('inbox'); }
+  // Prywatna skrzynka dla skrótu: users/{uid}/in_<klucz>. Reguły bazy pozwalają tam dopisać płatność
+  // bez logowania, ale tylko znając klucz zapisany w meta (inboxKey) — skrót nie potrzebuje hasła.
+  var inboxKey = null;
+  function keyCol() { return userDoc().collection('in_' + inboxKey); }
+  function newKey() {
+    var abc = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789', out = '';
+    var r = new Uint32Array(28);
+    (window.crypto || window.msCrypto).getRandomValues(r);
+    for (var i = 0; i < r.length; i++) out += abc.charAt(r[i] % abc.length);
+    return out;
+  }
+  function ensureInboxKey() {
+    if (!user || !ready) return Promise.resolve(null);
+    var g = gen;
+    var ref = metaRef();
+    return db.runTransaction(function (tx) {
+      return tx.get(ref).then(function (snap) {
+        var k = snap.exists && snap.data().inboxKey;
+        if (typeof k === 'string' && /^[A-Za-z0-9]{20,}$/.test(k)) return k;
+        k = newKey();
+        tx.set(ref, { inboxKey: k }, { merge: true });
+        return k;
+      });
+    }).then(function (k) {
+      if (g !== gen) return null;
+      if (k !== inboxKey) { inboxKey = k; listenKeyInbox(); }
+      return k;
+    }).catch(function () { return null; });
+  }
+  var keyUnsub = null;
+  function listenKeyInbox() {
+    if (keyUnsub) { try { keyUnsub(); } catch (e) { /* już odpięte */ } keyUnsub = null; }
+    if (!inboxKey || !user || !ready) return;
+    var g = gen;
+    keyUnsub = keyCol().onSnapshot({ includeMetadataChanges: true }, function (snap) {
+      if (!ready || g !== gen || snap.empty) return;
+      processInbox(snap.docs.filter(function (d) { return !d.metadata.hasPendingWrites; }));
+    }, function () { /* np. brak sieci — wróci przy ponownym nasłuchu */ });
+    unsubs.push(function () { if (keyUnsub) { keyUnsub(); keyUnsub = null; } });
+  }
 
   function setStatus(s, msg) { status = s; statusMsg = msg || ''; renderAccount(); }
   function detach() { unsubs.forEach(function (u) { try { u(); } catch (e) { /* już odpięte */ } }); unsubs = []; }
@@ -403,7 +465,7 @@
     detach();
     clearTimeout(retryTimer);
     user = u; ready = false; reconciling = false; base = null; lastEntries = {}; listenBroken = false; pending = 0;
-    pushAgain = false; deferredRemote = null; inboxBusy = {};
+    pushAgain = false; deferredRemote = null; inboxBusy = {}; inboxKey = null; keyUnsub = null;
     setActive(false);
     renderAccount();
     if (!u) { setStatus(configured ? 'signedOut' : 'local'); renderBackups(); return; }
@@ -472,6 +534,7 @@
       setActive(true);
       listen();
       recoverClaims();
+      ensureInboxKey();
       lastSyncAt = Date.now();
       setStatus('ok');
       renderBackups();
@@ -536,6 +599,7 @@
       if (!ready || g !== gen || snap.empty) return;
       processInbox(snap.docs.filter(function (d) { return !d.metadata.hasPendingWrites; }));
     }, function () { /* skrzynka opcjonalna */ }));
+    listenKeyInbox();
     unsubs.push(metaRef().onSnapshot({ includeMetadataChanges: true }, function (snap) {
       if (!ready || g !== gen || snap.metadata.hasPendingWrites || !snap.exists || !base) return;
       var server = normCloud(snap.data());
@@ -886,28 +950,32 @@
       body.innerHTML = '<p class="guide-intro">Najpierw zaloguj się w karcie Konto — płatności trafiają do Twojej bazy w chmurze.</p>';
       return;
     }
-    var signIn = 'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + cfg.apiKey;
-    var inbox = 'https://firestore.googleapis.com/v1/projects/' + cfg.projectId + '/databases/(default)/documents/users/' + user.uid + '/inbox';
+    if (!inboxKey) {
+      body.innerHTML = '<p class="guide-intro">Przygotowuję Twój prywatny adres skrzynki…</p>';
+      ensureInboxKey().then(function (k) {
+        if (k) renderGuide();
+        else body.innerHTML = '<p class="guide-intro">Nie udało się przygotować adresu (brak internetu?). Zamknij i otwórz instrukcję ponownie.</p>';
+      });
+      return;
+    }
+    var inbox = 'https://firestore.googleapis.com/v1/projects/' + cfg.projectId + '/databases/(default)/documents/users/' + user.uid + '/in_' + inboxKey;
     body.innerHTML =
-      '<p class="guide-intro">Raz ustawiasz automatyzację w aplikacji <b>Skróty</b> na iPhonie. Potem każda płatność Apple Pay (telefonem lub zegarkiem) sama dopisze się do Saldo jako wydatek z konta, z dobraną grupą.</p>' +
+      '<p class="guide-intro">Raz ustawiasz automatyzację w aplikacji <b>Skróty</b> na iPhonie. Potem każda płatność Apple Pay (telefonem lub zegarkiem) sama dopisze się do Saldo jako wydatek z konta, z dobraną grupą. Skrót ma tylko 3 bloki i nie potrzebuje hasła.</p>' +
       '<div class="guide-step"><h4><span class="guide-num">1</span>Nowa automatyzacja</h4>' +
-        '<p>Otwórz <b>Skróty → Automatyzacja → +</b> i wybierz <b>Transakcja</b>. Zaznacz karty z Portfela, wybierz <b>Uruchom natychmiast</b>, potem <b>Dalej → Nowy pusty skrót</b>.</p></div>' +
-      '<div class="guide-step"><h4><span class="guide-num">2</span>Logowanie do bazy</h4>' +
-        '<p>Dodaj akcję <b>Pobierz zawartość URL</b> i wklej adres:</p>' + copyBox(signIn) +
-        '<p>Rozwiń szczegóły: metoda <b>POST</b>, treść żądania <b>JSON</b> i dodaj pola:</p>' +
-        '<ul><li><b>email</b> (Tekst):</li></ul>' + copyBox(user.email || '') +
-        '<ul><li><b>password</b> (Tekst): Twoje hasło do Saldo</li><li><b>returnSecureToken</b> (Tekst): wpisz <b>true</b> — to pole jest konieczne, bez niego baza odrzuci płatność (błąd 401)</li></ul></div>' +
-      '<div class="guide-step"><h4><span class="guide-num">3</span>Odczyt klucza</h4>' +
-        '<p>Dodaj akcję <b>Pobierz wartość słownika</b>: pobierz <b>wartość</b> dla klucza</p>' + copyBox('idToken') + '<p>z <b>Zawartość URL</b>.</p></div>' +
-      '<div class="guide-step"><h4><span class="guide-num">4</span>Wysłanie płatności</h4>' +
-        '<p>Dodaj drugą akcję <b>Pobierz zawartość URL</b> z adresem:</p>' + copyBox(inbox) +
-        '<p>Metoda <b>POST</b>. W <b>Nagłówkach</b> dodaj klucz</p>' + copyBox('Authorization') +
-        '<p>z wartością: wpisz <b>Bearer</b> i spację, a potem wstaw zmienną <b>Wartość słownika</b>.</p>' +
-        '<p>Treść żądania <b>JSON</b>: dodaj pole <b>fields</b> typu <b>Słownik</b>, a w nim trzy pola typu Słownik: <b>amount</b>, <b>merchant</b> i <b>card</b>. W każdym dodaj pole <b>stringValue</b> (Tekst) i wstaw zmienną z Transakcji:</p>' +
-        '<ul><li>amount → <b>Kwota</b></li><li>merchant → <b>Sprzedawca</b></li><li>card → <b>Karta</b></li></ul></div>' +
-      '<div class="guide-step"><h4><span class="guide-num">5</span>Gotowe</h4>' +
+        '<p>Otwórz <b>Skróty → Automatyzacja → +</b> i wybierz <b>Portfel</b> (w starszych iOS: <b>Transakcja</b>). Zaznacz karty, wybierz <b>Uruchom od razu</b>, potem <b>Nowy pusty skrót</b>.</p></div>' +
+      '<div class="guide-step"><h4><span class="guide-num">2</span>Adres skrzynki</h4>' +
+        '<p>Dodaj czynność <b>URL</b> (ikona łańcucha) i wklej do niej ten adres — to Twój prywatny adres, nie pokazuj go nikomu:</p>' + copyBox(inbox) +
+        '<p class="guide-note">Wklejanie: stuknij pole raz, potem drugi raz i wybierz <b>Wklej</b>. Nie przytrzymuj — to otwiera listę zmiennych.</p></div>' +
+      '<div class="guide-step"><h4><span class="guide-num">3</span>Wysłanie płatności</h4>' +
+        '<p>Dodaj czynność <b>Pobierz zawartość URL</b> (pod blokiem URL). Rozwiń szczegóły: <b>Metoda: POST</b>, <b>Treść żądania: JSON</b>. Nagłówków nie dodawaj.</p>' +
+        '<p>Dodaj pole <b>Słownik</b> o kluczu</p>' + copyBox('fields') +
+        '<p>Wejdź w nie i dodaj dwa pola typu <b>Słownik</b>:</p>' + copyBox('amount') + copyBox('merchant') +
+        '<p>W każdym z nich dodaj pole <b>Tekst</b> o kluczu</p>' + copyBox('stringValue') +
+        '<p>i jako wartość wstaw zmienną: przytrzymaj pole → <b>Dane wejściowe skrótu</b> → stuknij zmienną i wybierz:</p>' +
+        '<ul><li>w amount → <b>Kwota</b></li><li>w merchant → <b>Sprzedawca</b></li></ul></div>' +
+      '<div class="guide-step"><h4><span class="guide-num">4</span>Gotowe</h4>' +
         '<p>Zapisz automatyzację. Wydatek pojawi się w Saldo kilka sekund po płatności (albo przy następnym otwarciu aplikacji). Jeśli grupa się nie zgadza, zmień ją we wpisie — następnym razem Saldo zapamięta wybór dla tego sklepu.</p>' +
-        '<p class="guide-note">Działa tylko z płatnościami Apple Pay. Hasło zapisane w skrócie zostaje w Skrótach na Twoim telefonie.</p></div>' +
+        '<p class="guide-note">Działa tylko z płatnościami Apple Pay. Ręczne uruchomienie skrótu (przycisk ▶) wysyła pustą kwotę — Saldo pokaże wtedy komunikat „Nie rozpoznano kwoty”, co znaczy, że połączenie działa.</p></div>' +
       '<button class="primary-btn primary-btn--plain" id="guideTest">Wyślij płatność testową (1,00 zł)</button>';
   }
   $('applePayGuide').addEventListener('click', function () { renderGuide(); $('guideBody').scrollTop = 0; S.openSheet($('guideSheet')); });
@@ -923,7 +991,7 @@
     if (e.target.closest('#guideTest')) {
       if (!user || !ready) { S.toast('Najpierw zaloguj się i poczekaj na synchronizację', 'info'); return; }
       // Ta sama droga co skrót: dokument w skrzynce → aplikacja zamienia go w wydatek
-      inboxCol().add({ amount: '1,00 zł', merchant: 'Test Apple Pay', card: 'Test', at: Date.now() })
+      (inboxKey ? keyCol() : inboxCol()).add({ amount: '1,00 zł', merchant: 'Test Apple Pay' })
         .then(function () { S.closeSheet($('guideSheet')); })
         .catch(function (err) { S.toast('Nie udało się wysłać: ' + errText(err), 'info'); });
     }
@@ -988,6 +1056,7 @@
   });
   window.addEventListener('saldo:tab', function (e) { if (e.detail === 'account') { renderAccount(); renderBackups(); } });
   window.addEventListener('online', function () {
+    loadFirebase();
     if (!user) return;
     if (!ready) reconcile();
     else { if (listenBroken) listen(); setStatus(pending ? 'syncing' : 'ok'); pushChanges(); }
@@ -999,4 +1068,5 @@
   renderAccount();
   renderBackups();
   localAutoBackup();
+  loadFirebase();
 })();
