@@ -74,10 +74,19 @@
     var loans = {}, cats = {};
     var srcLoans = Array.isArray(m.loans) ? m.loans : Object.keys(m.loans || {}).map(function (k) { var x = m.loans[k] || {}; x.id = x.id || k; return x; });
     srcLoans.forEach(function (l) { if (l && l.id && l.name && n(l.amount) > 0) loans[l.id] = loanOut(l); });
-    var srcCats = Array.isArray(m.customCats) ? m.customCats : Object.keys(m.cats || {}).map(function (k) { var x = m.cats[k] || {}; x.id = x.id || k; return x; });
+    // Grupy: mapa „cats” (obecny format) + ewentualna stara lista „customCats” (pierwsza wersja) — obie naraz
+    var srcCats = Object.keys(m.cats && typeof m.cats === 'object' && !Array.isArray(m.cats) ? m.cats : {}).map(function (k) { var x = m.cats[k] || {}; x.id = x.id || k; return x; });
+    if (Array.isArray(m.customCats)) m.customCats.forEach(function (c) { if (c && c.id && !(m.cats && m.cats[c.id])) srcCats.push(c); });
     srcCats.forEach(function (c) { if (c && c.id && c.name) cats[c.id] = clean({ id: c.id, name: c.name, icon: c.icon || 'tag', color: c.color || '#8e8e93' }); });
     return { v: 2, cash: n(m.cash), bank: n(m.bank), cashAt: m.cashAt || null, bankAt: m.bankAt || null, loansAt: m.loansAt || null,
       lastFund: m.lastFund || 'cash', loans: loans, cats: cats };
+  }
+  // Stary format meta (tablice z pierwszej wersji) — przy najbliższej wysyłce zapisujemy pełne mapy i kasujemy tablice
+  var legacyMeta = false, legacyLoans = false;
+  function noteLegacy(m) {
+    if (!m) return;
+    if (Array.isArray(m.customCats) || Array.isArray(m.cats)) legacyMeta = true;
+    if (Array.isArray(m.loans)) { legacyMeta = true; legacyLoans = true; }
   }
   function fromCloud(cm, history) {
     var s = {
@@ -354,6 +363,14 @@
       setStatus('error', errText(e));
       return;
     }
+    var cleaning = legacyMeta;
+    if (cleaning) {
+      // Jednorazowo: pełne mapy grup (i pożyczek, jeśli były tablicą) + usunięcie starych tablic
+      patch = patch || { v: 2, updatedAt: FV().serverTimestamp() };
+      patch.cats = Object.assign(clean(cur.cats), patch.cats || {});
+      if (legacyLoans) patch.loans = clean(cur.loans);
+      patch.customCats = FV().delete();
+    }
     if (!patch && !ops.length) return;
     // Optymistycznie: baza i wpisy oznaczone jako wysłane (przy błędzie cofamy tylko tę wysyłkę)
     if (patch) base = clean(cur);
@@ -375,6 +392,7 @@
     };
     Promise.all(jobs).then(function () {
       if (g !== gen) { settle(); return; }
+      if (cleaning) { legacyMeta = false; legacyLoans = false; }
       lastSyncAt = Date.now();
       settle();
       if (!pending && !pushing) setStatus(listenBroken ? 'error' : 'ok', listenBroken ? 'Utracono połączenie na żywo z bazą — stuknij „Połącz ponownie”.' : '');
@@ -466,6 +484,7 @@
     clearTimeout(retryTimer);
     user = u; ready = false; reconciling = false; base = null; lastEntries = {}; listenBroken = false; pending = 0;
     pushAgain = false; deferredRemote = null; inboxBusy = {}; inboxKey = null; keyUnsub = null;
+    legacyMeta = false; legacyLoans = false;
     setActive(false);
     renderAccount();
     if (!u) { setStatus(configured ? 'signedOut' : 'local'); renderBackups(); return; }
@@ -488,6 +507,7 @@
         var now0 = S.getState();
         return replaceCloud(now0, [], null, g).then(function () { if (alive() && !S.isEmpty(now0)) S.toast('Dane zapisane w chmurze', 'success'); });
       }
+      noteLegacy(metaSnap.data());
       var cm = normCloud(metaSnap.data());
       var cloud = fromCloud(cm, cloudHist);
       if (S.isEmpty(local) || sameData(local, cloud)) {
@@ -602,6 +622,8 @@
     listenKeyInbox();
     unsubs.push(metaRef().onSnapshot({ includeMetadataChanges: true }, function (snap) {
       if (!ready || g !== gen || snap.metadata.hasPendingWrites || !snap.exists || !base) return;
+      noteLegacy(snap.data());
+      if (legacyMeta && !pushing) setTimeout(pushChanges, 0);
       var server = normCloud(snap.data());
       if (stable(server) === stable(base)) { deferredRemote = null; return; }
       if (pushing) { deferredRemote = server; return; }   // zastosuj po zakończeniu wysyłki
