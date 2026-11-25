@@ -65,8 +65,10 @@
     var loans = {}, cats = {};
     (s.loans || []).forEach(function (l) { if (l && l.id) loans[l.id] = loanOut(l); });
     (s.customCats || []).forEach(function (c) { if (c && c.id) cats[c.id] = clean({ id: c.id, name: c.name, icon: c.icon || 'tag', color: c.color || '#8e8e93' }); });
+    var hidden = {};
+    (s.hiddenCats || []).forEach(function (id) { if (typeof id === 'string' && id) hidden[id] = true; });
     return { v: 2, cash: n(s.cash), bank: n(s.bank), cashAt: s.cashAt || null, bankAt: s.bankAt || null, loansAt: s.loansAt || null,
-      lastFund: s.lastFund || 'cash', loans: loans, cats: cats };
+      lastFund: s.lastFund || 'cash', loans: loans, cats: cats, hidden: hidden };
   }
   // Odczyt meta z chmury (także starszego formatu z tablicami) do postaci znormalizowanej
   function normCloud(m) {
@@ -78,8 +80,15 @@
     var srcCats = Object.keys(m.cats && typeof m.cats === 'object' && !Array.isArray(m.cats) ? m.cats : {}).map(function (k) { var x = m.cats[k] || {}; x.id = x.id || k; return x; });
     if (Array.isArray(m.customCats)) m.customCats.forEach(function (c) { if (c && c.id && !(m.cats && m.cats[c.id])) srcCats.push(c); });
     srcCats.forEach(function (c) { if (c && c.id && c.name) cats[c.id] = clean({ id: c.id, name: c.name, icon: c.icon || 'tag', color: c.color || '#8e8e93' }); });
+    var hidden = {};
+    if (m.hidden && typeof m.hidden === 'object' && !Array.isArray(m.hidden)) Object.keys(m.hidden).forEach(function (k) { if (m.hidden[k] === true) hidden[k] = true; });
     return { v: 2, cash: n(m.cash), bank: n(m.bank), cashAt: m.cashAt || null, bankAt: m.bankAt || null, loansAt: m.loansAt || null,
-      lastFund: m.lastFund || 'cash', loans: loans, cats: cats };
+      lastFund: m.lastFund || 'cash', loans: loans, cats: cats, hidden: hidden };
+  }
+  // Wbudowane grupy znane tej wersji aplikacji — grup spoza tej listy (z nowszej/starszej wersji) nie kasujemy w chmurze
+  function knownHideable(id) {
+    var list = (window.SaldoIcons && window.SaldoIcons.DEFAULT_CATS) || [];
+    return id !== 'other' && list.some(function (c) { return c.id === id; });
   }
   // Stary format meta (tablice z pierwszej wersji) — przy najbliższej wysyłce zapisujemy pełne mapy i kasujemy tablice
   var legacyMeta = false, legacyLoans = false;
@@ -93,6 +102,7 @@
       cash: cm.cash, bank: cm.bank, cashAt: cm.cashAt, bankAt: cm.bankAt, loansAt: cm.loansAt, lastFund: cm.lastFund,
       loans: Object.keys(cm.loans).map(function (k) { return clean(cm.loans[k]); }),
       customCats: Object.keys(cm.cats).map(function (k) { return clean(cm.cats[k]); }),
+      hiddenCats: Object.keys(cm.hidden || {}),
       history: (history || []).slice().sort(function (a, b) { return b.at - a.at; })
     };
     return S.migrate(s);
@@ -321,6 +331,11 @@
     Object.keys(cur.cats).forEach(function (id) { if (stable(cur.cats[id]) !== stable(b.cats[id] || null)) cp[id] = clean(cur.cats[id]); });
     Object.keys(b.cats).forEach(function (id) { if (!cur.cats[id]) cp[id] = FV().delete(); });
     if (Object.keys(cp).length) { p.cats = cp; any = true; }
+    // Usunięte wbudowane grupy: osobne klucze mapy (usunięcie na jednym urządzeniu nie kasuje drugiego)
+    var hp = {}, ch = cur.hidden || {}, bh = b.hidden || {};
+    Object.keys(ch).forEach(function (id) { if (!bh[id]) hp[id] = true; });
+    Object.keys(bh).forEach(function (id) { if (!ch[id] && knownHideable(id)) hp[id] = FV().delete(); });
+    if (Object.keys(hp).length) { p.hidden = hp; any = true; }
     if (!any) return null;
     p.v = 2;
     p.updatedAt = FV().serverTimestamp();
@@ -457,6 +472,7 @@
     var catIds = {};
     m.customCats.forEach(function (c) { catIds[c.id] = 1; });
     (local.customCats || []).forEach(function (c) { if (!catIds[c.id]) m.customCats.push(clean(c)); });
+    m.hiddenCats = (m.hiddenCats || []).concat((local.hiddenCats || []).filter(function (id) { return (m.hiddenCats || []).indexOf(id) === -1; }));
     m.history = (cloud.history || []).concat(extra).sort(function (a, b) { return b.at - a.at; });
     ['cashAt', 'bankAt', 'loansAt'].forEach(function (k) { m[k] = Math.max(local[k] || 0, cloud[k] || 0) || null; });
     return S.migrate(m);
@@ -601,6 +617,11 @@
     // grupy
     Object.keys(cur.cats).forEach(function (id) { if (!b.cats[id] || stable(cur.cats[id]) !== stable(b.cats[id])) out.cats[id] = clean(cur.cats[id]); });
     Object.keys(b.cats).forEach(function (id) { if (!cur.cats[id]) delete out.cats[id]; });
+    // usunięte wbudowane grupy: z chmury + niewysłane zmiany lokalne
+    out.hidden = out.hidden || {};
+    var ch = cur.hidden || {}, bh = b.hidden || {};
+    Object.keys(ch).forEach(function (id) { if (!bh[id]) out.hidden[id] = true; });
+    Object.keys(bh).forEach(function (id) { if (!ch[id] && knownHideable(id)) delete out.hidden[id]; });
     base = clean(server);
     var next = fromCloud(out, s.history);
     if (stable(toCloud(next)) !== stable(cur)) S.replaceState(next, { silent: true });

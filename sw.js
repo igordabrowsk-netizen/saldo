@@ -1,5 +1,5 @@
 // Saldo — Service Worker (offline, cache app-shell + biblioteki Firebase)
-const CACHE = 'saldo-v19';
+const CACHE = 'saldo-v20';
 const SHELL = [
   './',
   './index.html',
@@ -59,8 +59,9 @@ self.addEventListener('fetch', (event) => {
     })));
     return;
   }
+  // cache: 'no-cache' — zawsze pytamy serwer, czy plik się zmienił (pamięć HTTP potrafi trzymać starą wersję ~10 min)
   event.respondWith(
-    fetch(req)
+    fetch(req, { cache: 'no-cache' })
       .then((res) => {
         if ((own && res.ok && res.type === 'basic') || (lib && (res.ok || res.type === 'opaque'))) {
           const copy = res.clone();

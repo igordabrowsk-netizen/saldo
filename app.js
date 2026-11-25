@@ -25,7 +25,7 @@
   var loadWarning = '';
 
   function defaultState() {
-    return { cash: 0, bank: 0, cashAt: null, bankAt: null, loans: [], loansAt: null, lastFund: 'cash', history: [], customCats: [] };
+    return { cash: 0, bank: 0, cashAt: null, bankAt: null, loans: [], loansAt: null, lastFund: 'cash', history: [], customCats: [], hiddenCats: [] };
   }
   function num(v) { v = Number(v); return isFinite(v) ? Math.round(v) : 0; }
 
@@ -62,6 +62,11 @@
     ['cashAt', 'bankAt', 'loansAt'].forEach(function (k) { s[k] = num(s[k]) || null; });
     s.customCats = s.customCats.filter(function (c) { return c && typeof c === 'object' && c.id && c.name; });
     s.customCats.forEach(function (c) { c.name = String(c.name).slice(0, 24); if (!/^#[0-9a-f]{6}$/i.test(c.color || '')) c.color = '#8e8e93'; if (!c.icon) c.icon = 'tag'; });
+    // Usunięte (ukryte) wbudowane grupy — tylko znane identyfikatory, bez „Inne”, bez powtórzeń
+    if (!Array.isArray(s.hiddenCats)) s.hiddenCats = [];
+    var builtIn = {};
+    DEFAULT_CATS.forEach(function (c) { if (c.id !== 'other') builtIn[c.id] = 1; });
+    s.hiddenCats = s.hiddenCats.filter(function (id, i, a) { return typeof id === 'string' && builtIn[id] && a.indexOf(id) === i; });
     if (['cash', 'bank', 'none'].indexOf(s.lastFund) === -1) s.lastFund = 'cash';
     return s;
   }
@@ -158,15 +163,28 @@
   function norm(s) {
     return String(s).toLowerCase().replace(/ł/g, 'l').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
   }
+  // allCats — wszystkie znane grupy (do wyświetlania starych wpisów); visibleCats — do wyboru (bez usuniętych wbudowanych)
   function allCats() { return DEFAULT_CATS.concat(state.customCats); }
+  function isHiddenCat(id) { return state.hiddenCats.indexOf(id) !== -1; }
+  function visibleCats() { return DEFAULT_CATS.filter(function (c) { return !isHiddenCat(c.id); }).concat(state.customCats); }
+  function isUsableCat(id) { return visibleCats().some(function (c) { return c.id === id; }); }
+  // Wpisy z usuniętej wbudowanej grupy (np. dopisane na innym urządzeniu po jej usunięciu) pokazują się jako „Inne”
   function catById(id) {
+    if (isHiddenCat(id)) id = 'other';
+    return catByIdRaw(id);
+  }
+  function catByIdRaw(id) {
     var list = allCats();
     for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
     return DEFAULT_CATS[DEFAULT_CATS.length - 1]; // Inne
   }
   function catUsage() {
     var u = {};
-    state.history.forEach(function (e) { if (e.mode === 'sub' && e.source !== 'loan') u[e.cat || 'other'] = (u[e.cat || 'other'] || 0) + 1; });
+    state.history.forEach(function (e) {
+      if (e.mode !== 'sub' || e.source === 'loan') return;
+      var k = !e.cat || isHiddenCat(e.cat) ? 'other' : e.cat;
+      u[k] = (u[k] || 0) + 1;
+    });
     return u;
   }
   function nextCustomColor() {
@@ -179,6 +197,12 @@
     name = String(name).trim().replace(/\s+/g, ' ').slice(0, 24);
     if (!name) return null;
     var exists = allCats().filter(function (c) { return norm(c.name) === norm(name); })[0];
+    if (exists && isHiddenCat(exists.id)) {
+      // nazwa usuniętej wbudowanej grupy — przywróć ją zamiast tworzyć duplikat
+      state.hiddenCats = state.hiddenCats.filter(function (id) { return id !== exists.id; });
+      save();
+      return { cat: exists, created: true };
+    }
     if (exists) return { cat: exists, created: false };
     var c = { id: 'c_' + uid(), name: name, icon: 'tag', color: nextCustomColor() };
     state.customCats.push(c);
@@ -220,7 +244,7 @@
   }
   function catMatches(q) {
     var nq = norm(q);
-    return allCats().filter(function (c) { return norm(c.name).indexOf(nq) !== -1; }).sort(function (a, b) {
+    return visibleCats().filter(function (c) { return norm(c.name).indexOf(nq) !== -1; }).sort(function (a, b) {
       var as = norm(a.name).indexOf(nq) === 0, bs = norm(b.name).indexOf(nq) === 0;
       return as !== bs ? (as ? -1 : 1) : byName(a, b);
     });
@@ -231,13 +255,13 @@
     var html = '';
     if (!q) {
       var u = catUsage();
-      var top = allCats().filter(function (c) { return u[c.id]; }).sort(function (a, b) { return u[b.id] - u[a.id]; }).slice(0, 5);
+      var top = visibleCats().filter(function (c) { return u[c.id]; }).sort(function (a, b) { return u[b.id] - u[a.id]; }).slice(0, 5);
       if (top.length) html += '<h2 class="section-header">Najczęściej używane</h2><ul class="group">' + top.map(function (c) { return catRow(c, sel); }).join('') + '</ul>';
       html += '<h2 class="section-header">Wszystkie grupy</h2><ul class="group">' +
-        allCats().slice().sort(byName).map(function (c) { return catRow(c, sel); }).join('') + '</ul>';
+        visibleCats().slice().sort(byName).map(function (c) { return catRow(c, sel); }).join('') + '</ul>';
     } else {
       var hits = catMatches(q);
-      var exact = allCats().some(function (c) { return norm(c.name) === norm(q); });
+      var exact = visibleCats().some(function (c) { return norm(c.name) === norm(q); });
       html += '<ul class="group">' + hits.map(function (c) { return catRow(c, sel); }).join('');
       if (!exact) {
         html += '<li><button class="row cat-row" data-create><span class="row-icon row-icon--blue">' + icon('plus') + '</span>' +
@@ -886,14 +910,23 @@
     var prev = $('newCatInput');
     if (prev && addingCat) catDraft = prev.value;
     var u = catUsage();
-    var rows = state.customCats.map(function (c) {
+    // Wszystkie grupy do wyboru: najpierw własne, potem wbudowane; „Inne” zostaje zawsze (nie da się jej usunąć)
+    var list = state.customCats.slice().sort(byName).concat(DEFAULT_CATS.filter(function (c) { return !isHiddenCat(c.id); }).sort(byName));
+    var rows = list.map(function (c) {
       var n = u[c.id] || 0;
+      var own = c.id.indexOf('c_') === 0 || !DEFAULT_CATS.some(function (d) { return d.id === c.id; });
+      var sub = (n ? plural(n, 'wydatek', 'wydatki', 'wydatków') : 'Brak wydatków') + (own ? ' · Twoja grupa' : '');
       return '<li><div class="row">' +
         '<span class="row-icon cat-icon" style="background-color:' + c.color + '">' + icon(c.icon) + '</span>' +
-        '<span class="row-body"><span class="row-title">' + esc(c.name) + '</span><span class="row-sub">' + (n ? plural(n, 'wydatek', 'wydatki', 'wydatków') : 'Brak wydatków') + '</span></span>' +
-        '<button class="row-del" data-del-cat="' + esc(c.id) + '" aria-label="Usuń grupę ' + esc(c.name) + '">' + icon('trash') + '</button>' +
+        '<span class="row-body"><span class="row-title">' + esc(c.name) + '</span><span class="row-sub">' + sub + '</span></span>' +
+        (c.id === 'other' ? '' : '<button class="row-del" data-del-cat="' + esc(c.id) + '" aria-label="Usuń grupę ' + esc(c.name) + '">' + icon('trash') + '</button>') +
         '</div></li>';
     });
+    if (state.hiddenCats.length) {
+      rows.push('<li><button class="row" data-restore-cats><span class="row-icon row-icon--gray">' + icon('undo') + '</span>' +
+        '<span class="row-body"><span class="row-title">Przywróć usunięte grupy</span><span class="row-sub">' +
+        esc(state.hiddenCats.map(function (id) { return catByIdRaw(id).name; }).join(', ')) + '</span></span></button></li>');
+    }
     if (addingCat) {
       rows.push('<li class="row row--input"><span class="row-icon row-icon--blue">' + icon('tag') + '</span>' +
         '<input id="newCatInput" type="text" maxlength="24" placeholder="Nazwa nowej grupy" enterkeyhint="done" value="' + esc(catDraft) + '">' +
@@ -902,7 +935,7 @@
     }
     el.customCats.innerHTML = rows.join('');
     el.customCats.hidden = rows.length === 0;
-    el.customCatsHint.hidden = state.customCats.length > 0 || addingCat;
+    el.customCatsHint.hidden = addingCat;
     el.addCatBtn.hidden = addingCat;
     if (addingCat) {
       var inp = $('newCatInput');
@@ -1415,7 +1448,7 @@
     el.entryNote.value = e.note || '';
     var exp = isExpense(e);
     el.entryCatBlock.hidden = !exp;
-    entryCat = e.cat || 'other';
+    entryCat = !e.cat || isHiddenCat(e.cat) ? 'other' : e.cat;
     if (exp) renderCatButton('entryCatPick', entryCat);
     openPanel(el.entrySheet);
   }
@@ -1729,11 +1762,11 @@
       // Nauka: ostatni wydatek z tym samym sklepem (notatką)
       for (var i = 0; i < state.history.length; i++) {
         var e = state.history[i];
-        if (e.mode === 'sub' && e.source !== 'loan' && e.cat && normText(e.note) === m) return e.cat;
+        if (e.mode === 'sub' && e.source !== 'loan' && e.cat && normText(e.note) === m) return isUsableCat(e.cat) ? e.cat : 'other';
       }
       for (var r = 0; r < MERCHANT_RULES.length; r++) {
         var keys = MERCHANT_RULES[r][1];
-        for (var k = 0; k < keys.length; k++) if (m.indexOf(keys[k]) !== -1 || m.indexOf(' ' + keys[k].trim() + ' ') !== -1) return MERCHANT_RULES[r][0];
+        for (var k = 0; k < keys.length; k++) if (m.indexOf(keys[k]) !== -1 || m.indexOf(' ' + keys[k].trim() + ' ') !== -1) return isUsableCat(MERCHANT_RULES[r][0]) ? MERCHANT_RULES[r][0] : 'other';
       }
     }
     return 'other';
@@ -1872,13 +1905,31 @@
   });
   el.addCatBtn.addEventListener('click', function () { addingCat = true; focusNewCat = true; renderCustomCats(); });
   el.customCats.addEventListener('click', function (e) {
+    if (e.target.closest('[data-restore-cats]')) {
+      var names = state.hiddenCats.map(function (x) { return catByIdRaw(x).name; }).join(', ');
+      confirmAction('Przywrócić usunięte grupy: ' + names + '? Wydatki, które wcześniej trafiły do „Inne”, tam zostaną.', 'Przywróć', function () {
+        state.hiddenCats = [];
+        save(); render(); showDone('Grupy przywrócone');
+      });
+      return;
+    }
     var b = e.target.closest('[data-del-cat]');
     if (!b) return;
     var id = b.getAttribute('data-del-cat');
+    if (id === 'other') return;
     var c = catById(id);
-    confirmAction('Usunąć grupę „' + c.name + '”? Wydatki z tej grupy trafią do grupy „Inne”.', 'Usuń grupę', function () {
-      if (!state.customCats.some(function (x) { return x.id === id; })) return;
-      state.customCats = state.customCats.filter(function (x) { return x.id !== id; });
+    var isOwn = state.customCats.some(function (x) { return x.id === id; });
+    var isBuiltIn = DEFAULT_CATS.some(function (x) { return x.id === id; });
+    var n = catUsage()[id] || 0;
+    confirmAction('Usunąć grupę „' + c.name + '”?' + (n ? ' ' + plural(n, 'wydatek', 'wydatki', 'wydatków') + ' z tej grupy trafi do grupy „Inne”.' : '') +
+      (isBuiltIn ? ' Możesz ją później przywrócić.' : ''), 'Usuń grupę', function () {
+      if (isOwn) {
+        if (!state.customCats.some(function (x) { return x.id === id; })) return;
+        state.customCats = state.customCats.filter(function (x) { return x.id !== id; });
+      } else if (isBuiltIn) {
+        if (isHiddenCat(id)) return;
+        state.hiddenCats.push(id);
+      } else return;
       state.history.forEach(function (h) { if (h.cat === id) h.cat = 'other'; });
       save(); render(); toast('Grupa usunięta', 'delete');
     });
